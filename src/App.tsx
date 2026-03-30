@@ -1149,14 +1149,54 @@ function doPost(e) {
   }
   
   if (action === "sync") {
-    reportSheet.clear();
+    reportSheet.clearContents();
+    var headers = ["id", "tanggal_input", "tanggal_pelaporan", "nama_pegawai", "nip", "divisi", "rencana_kerja", "rincian_kerja", "output", "bukti_link", "nilai_atasan", "catatan_atasan", "status", "dinilai_oleh", "tanggal_penilaian"];
+    reportSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     if (params.data && params.data.length > 0) {
-      var headers = Object.keys(params.data[0]);
-      reportSheet.appendRow(headers);
-      params.data.forEach(function(row) {
-        reportSheet.appendRow(headers.map(function(h) { return row[h]; }));
+      var rows = params.data.map(function(row) {
+        return headers.map(function(h) { return row[h] || ""; });
       });
+      reportSheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
     }
+    return ContentService.createTextOutput(JSON.stringify({ success: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === "delete_user") {
+    var data = userSheet.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][1] === params.username) {
+        userSheet.deleteRow(i + 1);
+        break;
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({ success: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === "save_report") {
+    var headers = ["id", "tanggal_input", "tanggal_pelaporan", "nama_pegawai", "nip", "divisi", "rencana_kerja", "rincian_kerja", "output", "bukti_link", "nilai_atasan", "catatan_atasan", "status", "dinilai_oleh", "tanggal_penilaian"];
+    if (reportSheet.getLastRow() === 0) {
+      reportSheet.appendRow(headers);
+    }
+    
+    // Check if update or new
+    var data = reportSheet.getDataRange().getValues();
+    var rowIdx = -1;
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] == params.report.id) {
+        rowIdx = i + 1;
+        break;
+      }
+    }
+    
+    var rowData = headers.map(function(h) { return params.report[h]; });
+    if (rowIdx > -1) {
+      reportSheet.getRange(rowIdx, 1, 1, headers.length).setValues([rowData]);
+    } else {
+      reportSheet.appendRow(rowData);
+    }
+    
     return ContentService.createTextOutput(JSON.stringify({ success: true }))
       .setMimeType(ContentService.MimeType.JSON);
   }

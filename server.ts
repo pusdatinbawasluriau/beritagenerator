@@ -109,26 +109,28 @@ async function startServer() {
       const dataToSync = {
         action: "sync",
         data: laporan.map(l => ({
-          id: l.id,
-          tanggal_input: l.tanggal,
-          tanggal_pelaporan: l.tanggal_pelaporan,
-          nama_pegawai: l.nama_pegawai,
-          nip: l.nip_pegawai,
-          divisi: l.divisi,
-          rencana_kerja: l.rencana_kerja,
-          rincian_kerja: l.rincian_kerja,
-          output: l.output,
-          bukti_link: l.bukti_link,
-          nilai_atasan: l.nilai_atasan,
-          catatan_atasan: l.catatan_atasan,
-          status: l.status,
-          penilai: l.dinilai_oleh,
-          tanggal_penilaian: l.tanggal_penilaian
+          id: l.id || "",
+          tanggal_input: l.tanggal || "",
+          tanggal_pelaporan: l.tanggal_pelaporan || "",
+          nama_pegawai: l.nama_pegawai || "",
+          nip: l.nip_pegawai || "",
+          divisi: l.divisi || "",
+          rencana_kerja: l.rencana_kerja || "",
+          rincian_kerja: l.rincian_kerja || "",
+          output: l.output || "",
+          bukti_link: l.bukti_link || "",
+          nilai_atasan: l.nilai_atasan || "",
+          catatan_atasan: l.catatan_atasan || "",
+          status: l.status || "Pending",
+          dinilai_oleh: l.dinilai_oleh || "",
+          tanggal_penilaian: l.tanggal_penilaian || ""
         }))
       };
-      await axios.post(settings.webapp_url, dataToSync, { timeout: 10000 });
-    } catch (err) {
-      console.error("Auto-sync error:", err);
+      console.log(`Syncing ${laporan.length} reports to Google Sheets...`);
+      await axios.post(settings.webapp_url, dataToSync, { timeout: 15000 });
+      console.log("Sync successful");
+    } catch (err: any) {
+      console.error("Auto-sync error:", err.message);
     }
   }
 
@@ -353,9 +355,15 @@ async function startServer() {
     if (!url) return res.status(400).json({ message: "URL not set" });
 
     try {
-      await axios.post(url, { action: "delete_user", userId: id });
+      // Get username first to delete from Google Sheets
+      const userToDelete = db.prepare("SELECT username FROM users WHERE id = ?").get() as any;
+      if (userToDelete) {
+        await axios.post(url, { action: "delete_user", username: userToDelete.username });
+        db.prepare("DELETE FROM users WHERE id = ?").run(id);
+      }
       res.json({ success: true });
     } catch (error) {
+      console.error("Delete user error:", error);
       res.status(500).json({ message: "Error" });
     }
   });
