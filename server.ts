@@ -315,8 +315,16 @@ async function startServer() {
           const response = await axios.post(url, { action: "get_users" });
           if (response.data.users && Array.isArray(response.data.users)) {
             const insertUser = db.prepare("INSERT OR REPLACE INTO users (username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            const usernamesInGoogle = response.data.users.map((u: any) => u.username);
+            
             for (const u of response.data.users) {
               insertUser.run(u.username, u.password || "", u.nama, u.nip || "", u.role, u.divisi || "", u.drive_folder_id || "");
+            }
+
+            // Remove users locally that are no longer in Google Sheets (except admin)
+            if (usernamesInGoogle.length > 0) {
+              const placeholders = usernamesInGoogle.map(() => "?").join(",");
+              db.prepare(`DELETE FROM users WHERE username NOT IN (${placeholders}) AND username != 'admin'`).run(...usernamesInGoogle);
             }
           }
         } catch (err) {
@@ -369,15 +377,17 @@ async function startServer() {
 
     try {
       // Get username first to delete from Google Sheets
-      const userToDelete = db.prepare("SELECT username FROM users WHERE id = ?").get() as any;
+      const userToDelete = db.prepare("SELECT username FROM users WHERE id = ?").get(id) as any;
       if (userToDelete) {
+        console.log(`Attempting to delete user ${userToDelete.username} from Google Sheets...`);
         await axios.post(url, { action: "delete_user", username: userToDelete.username });
         db.prepare("DELETE FROM users WHERE id = ?").run(id);
+        console.log(`User ${userToDelete.username} deleted successfully.`);
       }
       res.json({ success: true });
-    } catch (error) {
-      console.error("Delete user error:", error);
-      res.status(500).json({ message: "Error" });
+    } catch (error: any) {
+      console.error("Delete user error:", error.message);
+      res.status(500).json({ message: "Gagal menghapus pengguna: " + error.message });
     }
   });
 
