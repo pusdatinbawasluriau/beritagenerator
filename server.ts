@@ -32,7 +32,8 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS google_settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    webapp_url TEXT
+    webapp_url TEXT,
+    parent_folder_id TEXT
   );
 
   CREATE TABLE IF NOT EXISTS laporan (
@@ -54,8 +55,8 @@ db.exec(`
   );
 `);
 
-// Migration for new columns
-try { db.exec("ALTER TABLE laporan ADD COLUMN tanggal_pelaporan TEXT;"); } catch (e) {}
+  // Migration for google_settings
+  try { db.exec("ALTER TABLE google_settings ADD COLUMN parent_folder_id TEXT;"); } catch (e) {}
 try { db.exec("ALTER TABLE laporan ADD COLUMN rincian_kerja TEXT;"); } catch (e) {}
 try { db.exec("ALTER TABLE laporan ADD COLUMN output TEXT;"); } catch (e) {}
 try { db.exec("ALTER TABLE users ADD COLUMN nip TEXT;"); } catch (e) {}
@@ -133,18 +134,22 @@ async function startServer() {
 
   // Google Web App Routes
   app.get("/api/google/settings", (req, res) => {
-    const settings = db.prepare("SELECT webapp_url FROM google_settings LIMIT 1").get() as any;
-    res.json({ webappUrl: settings?.webapp_url || "" });
+    const settings = db.prepare("SELECT webapp_url, parent_folder_id FROM google_settings LIMIT 1").get() as any;
+    res.json({ 
+      webappUrl: settings?.webapp_url || "",
+      parentFolderId: settings?.parent_folder_id || ""
+    });
   });
 
   app.post("/api/google/settings", (req, res) => {
-    const { webappUrl } = req.body;
+    const { webappUrl, parentFolderId } = req.body;
     try {
       const existing = db.prepare("SELECT id FROM google_settings LIMIT 1").get();
       if (existing) {
-        db.prepare("UPDATE google_settings SET webapp_url = ? WHERE id = ?").run(webappUrl, existing.id);
+        db.prepare("UPDATE google_settings SET webapp_url = ?, parent_folder_id = ? WHERE id = ?").run(webappUrl, parentFolderId, existing.id);
       } else {
-        db.prepare("INSERT INTO google_settings (webapp_url) VALUES (?)").run(webappUrl);
+        db.prepare("INSERT INTO google_settings (webapp_url, parent_folder_id) VALUES (?, ?)")
+          .run(webappUrl, parentFolderId);
       }
       res.json({ success: true });
     } catch (error: any) {
@@ -235,6 +240,7 @@ async function startServer() {
     }
 
     try {
+      const settings = db.prepare("SELECT parent_folder_id FROM google_settings LIMIT 1").get() as any;
       const response = await axios.post(url, {
         action: "register",
         username,
@@ -242,7 +248,8 @@ async function startServer() {
         nama,
         nip,
         role: "staf",
-        divisi
+        divisi,
+        parentFolderId: settings?.parent_folder_id || ""
       });
 
       if (response.data.success) {

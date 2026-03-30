@@ -56,6 +56,7 @@ export default function App() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [rekapStats, setRekapStats] = useState<any[]>([]);
   const [webappUrl, setWebappUrl] = useState('');
+  const [parentFolderId, setParentFolderId] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSavingUrl, setIsSavingUrl] = useState(false);
   const [syncStatus, setSyncStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
@@ -121,6 +122,7 @@ export default function App() {
       const res = await fetch('/api/google/settings');
       const data = await res.json();
       setWebappUrl(data.webappUrl);
+      setParentFolderId(data.parentFolderId);
     } catch (err) {
       console.error("Failed to fetch Google settings:", err);
     }
@@ -135,7 +137,7 @@ export default function App() {
       const res = await fetch('/api/google/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ webappUrl }),
+        body: JSON.stringify({ webappUrl, parentFolderId }),
       });
       if (res.ok) {
         setSyncStatus({ type: 'success', message: "URL Web App berhasil disimpan!" });
@@ -984,7 +986,7 @@ export default function App() {
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                   <div className="md:col-span-2">
                     <label className="block text-xs font-bold text-gray-400 uppercase mb-1">URL Web App Google Apps Script</label>
                     <input 
@@ -992,6 +994,16 @@ export default function App() {
                       value={webappUrl}
                       onChange={(e) => setWebappUrl(e.target.value)}
                       placeholder="https://script.google.com/macros/s/.../exec"
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">ID Folder Induk (Drive)</label>
+                    <input 
+                      type="text" 
+                      value={parentFolderId}
+                      onChange={(e) => setParentFolderId(e.target.value)}
+                      placeholder="ID Folder Google Drive"
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500"
                     />
                   </div>
@@ -1061,7 +1073,12 @@ function doPost(e) {
     }
     
     // Create Folder for User
-    var parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
+    var parentFolder;
+    if (params.parentFolderId) {
+      parentFolder = DriveApp.getFolderById(params.parentFolderId);
+    } else {
+      parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
+    }
     var folder = parentFolder.createFolder("Laporan - " + params.nama);
     var folderId = folder.getId();
     
