@@ -246,7 +246,11 @@ async function startServer() {
       });
 
       if (response.data.success) {
-        res.json({ success: true, id: response.data.id });
+        const { id, drive_folder_id } = response.data;
+        // Save to local SQLite for reference (especially drive_folder_id)
+        db.prepare("INSERT OR REPLACE INTO users (username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .run(username, password, nama, nip, "staf", divisi, drive_folder_id);
+        res.json({ success: true, id: id });
       } else {
         res.status(400).json({ message: response.data.message || "Gagal mendaftar" });
       }
@@ -279,7 +283,11 @@ async function startServer() {
 
       if (response.data.success) {
         console.log(`Login successful via Google Sheets for: ${username}`);
-        res.json(response.data.user);
+        const user = response.data.user;
+        // Sync to local SQLite
+        db.prepare("INSERT OR REPLACE INTO users (username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .run(user.username, user.password, user.nama, user.nip, user.role, user.divisi, user.drive_folder_id);
+        res.json(user);
       } else {
         res.status(401).json({ message: response.data.message || "Username atau password salah" });
       }

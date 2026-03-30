@@ -1041,9 +1041,63 @@ function doPost(e) {
   
   var params = JSON.parse(e.postData.contents);
   var action = params.action;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Ensure Sheets exist
+  var userSheet = ss.getSheetByName("Users") || ss.insertSheet("Users");
+  var reportSheet = ss.getSheetByName("Reports") || ss.insertSheet("Reports");
+  
+  if (userSheet.getLastRow() === 0) {
+    userSheet.appendRow(["id", "username", "password", "nama", "nip", "role", "divisi", "drive_folder_id"]);
+  }
+  
+  if (action === "register") {
+    var data = userSheet.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][1] === params.username) {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, message: "Username sudah ada" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+    
+    // Create Folder for User
+    var parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
+    var folder = parentFolder.createFolder("Laporan - " + params.nama);
+    var folderId = folder.getId();
+    
+    var newId = userSheet.getLastRow();
+    userSheet.appendRow([newId, params.username, params.password, params.nama, params.nip, params.role, params.divisi, folderId]);
+    
+    return ContentService.createTextOutput(JSON.stringify({ 
+      success: true, 
+      id: newId, 
+      drive_folder_id: folderId 
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  if (action === "login") {
+    var data = userSheet.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][1] === params.username && data[i][2] === params.password) {
+        return ContentService.createTextOutput(JSON.stringify({ 
+          success: true, 
+          user: {
+            id: data[i][0],
+            username: data[i][1],
+            nama: data[i][3],
+            nip: data[i][4],
+            role: data[i][5],
+            divisi: data[i][6],
+            drive_folder_id: data[i][7]
+          }
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({ success: false, message: "Username atau password salah" }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
   
   if (action === "create_user_folder") {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
     var parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
     var folder = parentFolder.createFolder(params.nama);
     return ContentService.createTextOutput(JSON.stringify({ folderId: folder.getId() }))
@@ -1070,14 +1124,12 @@ function doPost(e) {
   }
   
   if (action === "sync") {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getSheets()[0];
-    sheet.clear();
+    reportSheet.clear();
     if (params.data && params.data.length > 0) {
       var headers = Object.keys(params.data[0]);
-      sheet.appendRow(headers);
+      reportSheet.appendRow(headers);
       params.data.forEach(function(row) {
-        sheet.appendRow(headers.map(function(h) { return row[h]; }));
+        reportSheet.appendRow(headers.map(function(h) { return row[h]; }));
       });
     }
     return ContentService.createTextOutput(JSON.stringify({ success: true }))
