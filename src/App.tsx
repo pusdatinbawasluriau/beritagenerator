@@ -430,17 +430,23 @@ export default function App() {
   const confirmDelete = async () => {
     if (!itemToDelete) return;
     
-    if (itemToDelete.type === 'laporan') {
-      await fetch(`/api/laporan/${itemToDelete.id}`, { method: 'DELETE' });
-      fetchLaporan();
-    } else {
-      const res = await fetch(`/api/users/${itemToDelete.id}`, { method: 'DELETE' });
-      if (res.ok) {
-        fetchUsers();
+    try {
+      if (itemToDelete.type === 'laporan') {
+        await fetch(`/api/laporan/${itemToDelete.id}`, { method: 'DELETE' });
+        fetchLaporan();
       } else {
-        const err = await res.json();
-        console.error(err.message || 'Gagal menghapus pengguna');
+        const res = await fetch(`/api/users/${itemToDelete.id}`, { method: 'DELETE' });
+        if (res.ok) {
+          fetchUsers();
+        } else {
+          const err = await res.json();
+          alert(err.message || 'Gagal menghapus pengguna');
+          console.error(err.message || 'Gagal menghapus pengguna');
+        }
       }
+    } catch (error) {
+      console.error('Error deleting:', error);
+      alert('Terjadi kesalahan saat menghapus data');
     }
     
     setIsModalOpen(false);
@@ -1090,7 +1096,7 @@ function doPost(e) {
     var folder = parentFolder.createFolder("Laporan - " + params.nama);
     var folderId = folder.getId();
     
-    var newId = userSheet.getLastRow();
+    var newId = new Date().getTime(); // Use timestamp for unique ID
     userSheet.appendRow([newId, params.username, params.password, params.nama, params.nip, params.role, params.divisi, folderId]);
     
     return ContentService.createTextOutput(JSON.stringify({ 

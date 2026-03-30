@@ -373,33 +373,49 @@ async function startServer() {
   app.delete("/api/users/:id", async (req, res) => {
     const { id } = req.params;
     const url = getWebappUrl();
-    if (!url) return res.status(400).json({ message: "URL not set" });
+    if (!url) return res.status(400).json({ success: false, message: "URL not set" });
 
     try {
       // Get username first to delete from Google Sheets
-      // Ensure id is treated as a number for the query
       const userId = Number(id);
       const userToDelete = db.prepare("SELECT username FROM users WHERE id = ?").get(userId) as any;
       
-      if (userToDelete) {
-        console.log(`Attempting to delete user ${userToDelete.username} (ID: ${userId}) from Google Sheets...`);
-        const response = await axios.post(url, { action: "delete_user", username: userToDelete.username });
+      if (!userToDelete) {
+        console.warn(`User with ID ${userId} not found in local DB for deletion.`);
+        return res.status(404).json({ success: false, message: "Pengguna tidak ditemukan di database lokal" });
+      }
+
+      console.log(`Attempting to delete user ${userToDelete.username} (ID: ${userId}) from Google Sheets...`);
+      
+      try {
+        const response = await axios.post(url, { 
+          action: "delete_user", 
+          username: userToDelete.username 
+        }, {
+          timeout: 15000 // 15 seconds timeout
+        });
         
-        if (response.data.success) {
+        if (response.data && response.data.success) {
           db.prepare("DELETE FROM users WHERE id = ?").run(userId);
           console.log(`User ${userToDelete.username} deleted successfully from both Google Sheets and local DB.`);
-          res.json({ success: true });
+          return res.json({ success: true });
         } else {
-          console.error(`Google Sheets reported failure deleting user ${userToDelete.username}:`, response.data.message);
-          res.status(500).json({ success: false, message: response.data.message || "Gagal menghapus di Google Sheets" });
+          const errorMsg = response.data?.message || "Google Sheets gagal menghapus data";
+          console.error(`Google Sheets reported failure:`, errorMsg);
+          return res.status(500).json({ success: false, message: errorMsg });
         }
-      } else {
-        console.warn(`User with ID ${userId} not found in local DB for deletion.`);
-        res.status(404).json({ success: false, message: "Pengguna tidak ditemukan" });
+      } catch (axiosError: any) {
+        console.error("Axios error calling Google Web App:", axiosError.message);
+        // Even if Google Sheets call fails, we might want to allow local deletion if the user is sure,
+        // but for now let's be strict to maintain sync.
+        return res.status(500).json({ 
+          success: false, 
+          message: "Gagal menghubungi Google Sheets: " + (axiosError.response?.data || axiosError.message) 
+        });
       }
     } catch (error: any) {
-      console.error("Delete user error:", error.message);
-      res.status(500).json({ success: false, message: "Gagal menghapus pengguna: " + error.message });
+      console.error("Delete user route error:", error.message);
+      res.status(500).json({ success: false, message: "Terjadi kesalahan internal: " + error.message });
     }
   });
 
