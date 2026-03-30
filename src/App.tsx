@@ -68,6 +68,7 @@ export default function App() {
     if (savedUser) {
       const parsedUser = JSON.parse(savedUser);
       setUser(parsedUser);
+      setView('dashboard');
       if (parsedUser.role === 'admin' || parsedUser.role === 'atasan') {
         fetchGoogleSettings();
       }
@@ -199,6 +200,7 @@ export default function App() {
       if (res.ok) {
         setUser(data);
         localStorage.setItem('user', JSON.stringify(data));
+        setView('dashboard');
       } else {
         setLoginError(data.message || 'Username atau password salah');
       }
@@ -318,6 +320,7 @@ export default function App() {
 
   const handleLogout = () => {
     setUser(null);
+    setView('dashboard');
     localStorage.removeItem('user');
   };
 
