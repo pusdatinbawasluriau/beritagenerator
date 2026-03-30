@@ -109,7 +109,7 @@ async function startServer() {
     if (!settings || !settings.webapp_url) return;
 
     try {
-      const laporan = db.prepare("SELECT * FROM laporan ORDER BY tanggal DESC").all() as any[];
+      const laporan = db.prepare("SELECT * FROM laporan ORDER BY id DESC").all() as any[];
       const dataToSync = {
         action: "sync",
         data: laporan.map(l => ({
@@ -173,7 +173,7 @@ async function startServer() {
 
     try {
       // Get all data
-      const laporan = db.prepare("SELECT * FROM laporan ORDER BY tanggal DESC").all() as any[];
+      const laporan = db.prepare("SELECT * FROM laporan ORDER BY id DESC").all() as any[];
       
       const dataToSync = {
         action: "sync",
@@ -430,11 +430,11 @@ async function startServer() {
     const { role, nama, divisi } = req.query;
     let laporan;
     if (role === 'admin') {
-      laporan = db.prepare("SELECT * FROM laporan ORDER BY tanggal DESC").all();
+      laporan = db.prepare("SELECT * FROM laporan ORDER BY id DESC").all();
     } else if (role === 'atasan') {
-      laporan = db.prepare("SELECT * FROM laporan WHERE LOWER(divisi) = LOWER(?) ORDER BY tanggal DESC").all(divisi);
+      laporan = db.prepare("SELECT * FROM laporan WHERE LOWER(divisi) = LOWER(?) ORDER BY id DESC").all(divisi);
     } else {
-      laporan = db.prepare("SELECT * FROM laporan WHERE nama_pegawai = ? ORDER BY tanggal DESC").all(nama);
+      laporan = db.prepare("SELECT * FROM laporan WHERE nama_pegawai = ? ORDER BY id DESC").all(nama);
     }
     res.json(laporan);
   });

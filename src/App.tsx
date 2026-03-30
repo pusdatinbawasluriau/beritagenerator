@@ -1385,6 +1385,10 @@ function doPost(e) {
               </div>
             </div>
           )}
+
+          <footer className="mt-auto py-6 text-center text-gray-400 text-sm border-t border-gray-50">
+            Pusdatin Bawaslu Provinsi Riau @ 2026
+          </footer>
         </div>
       </main>
 
@@ -1578,7 +1582,7 @@ function doPost(e) {
                   </form>
                 )}
 
-                {(modalType === 'laporan' || modalType === 'nilai') && editingLaporan && (
+                {(modalType === 'laporan' || modalType === 'nilai') && editingLaporan && (user.role !== 'staf' || editingLaporan.status === 'Selesai') && (
                   <div className="space-y-6">
                     <div className="grid grid-cols-2 gap-6">
                       <div className="space-y-1">
