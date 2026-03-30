@@ -32,9 +32,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS google_settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    webapp_url TEXT,
-    FOREIGN KEY(user_id) REFERENCES users(id)
+    webapp_url TEXT
   );
 
   CREATE TABLE IF NOT EXISTS laporan (
@@ -135,34 +133,28 @@ async function startServer() {
 
   // Google Web App Routes
   app.get("/api/google/settings", (req, res) => {
-    const { userId } = req.query;
-    let settings = db.prepare("SELECT * FROM google_settings WHERE user_id = ?").get(userId) as any;
-    if (!settings) {
-      settings = db.prepare("SELECT * FROM google_settings LIMIT 1").get() as any;
-    }
+    const settings = db.prepare("SELECT webapp_url FROM google_settings LIMIT 1").get() as any;
     res.json({ webappUrl: settings?.webapp_url || "" });
   });
 
   app.post("/api/google/settings", (req, res) => {
-    const { userId, webappUrl } = req.body;
-    // Use a single row for global settings if userId is not provided or is 0
-    const targetId = userId || 1;
-    const existing = db.prepare("SELECT id FROM google_settings LIMIT 1").get();
-    
-    if (existing) {
-      db.prepare("UPDATE google_settings SET webapp_url = ?, user_id = ? WHERE id = ?").run(webappUrl, targetId, existing.id);
-    } else {
-      db.prepare("INSERT INTO google_settings (user_id, webapp_url) VALUES (?, ?)").run(targetId, webappUrl);
+    const { webappUrl } = req.body;
+    try {
+      const existing = db.prepare("SELECT id FROM google_settings LIMIT 1").get();
+      if (existing) {
+        db.prepare("UPDATE google_settings SET webapp_url = ? WHERE id = ?").run(webappUrl, existing.id);
+      } else {
+        db.prepare("INSERT INTO google_settings (webapp_url) VALUES (?)").run(webappUrl);
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error saving settings:", error.message);
+      res.status(500).json({ message: "Gagal menyimpan: " + error.message });
     }
-    res.json({ success: true });
   });
 
   app.post("/api/google/sync", async (req, res) => {
-    const { userId } = req.body;
-    let settings = db.prepare("SELECT * FROM google_settings WHERE user_id = ?").get(userId) as any;
-    if (!settings) {
-      settings = db.prepare("SELECT * FROM google_settings LIMIT 1").get() as any;
-    }
+    const settings = db.prepare("SELECT webapp_url FROM google_settings LIMIT 1").get() as any;
     
     if (!settings || !settings.webapp_url) {
       return res.status(400).json({ message: "URL Web App belum diatur" });

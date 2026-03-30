@@ -57,6 +57,7 @@ export default function App() {
   const [rekapStats, setRekapStats] = useState<any[]>([]);
   const [webappUrl, setWebappUrl] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isSavingUrl, setIsSavingUrl] = useState(false);
   const [syncStatus, setSyncStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -67,7 +68,7 @@ export default function App() {
       const parsedUser = JSON.parse(savedUser);
       setUser(parsedUser);
       if (parsedUser.role === 'admin' || parsedUser.role === 'atasan') {
-        fetchGoogleSettings(parsedUser.id);
+        fetchGoogleSettings();
       }
     }
   }, []);
@@ -115,9 +116,9 @@ export default function App() {
     setStats(data);
   };
 
-  const fetchGoogleSettings = async (userId: number) => {
+  const fetchGoogleSettings = async () => {
     try {
-      const res = await fetch(`/api/google/settings?userId=${userId}`);
+      const res = await fetch('/api/google/settings');
       const data = await res.json();
       setWebappUrl(data.webappUrl);
     } catch (err) {
@@ -128,18 +129,25 @@ export default function App() {
   const handleSaveWebappUrl = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
+    setIsSavingUrl(true);
+    setSyncStatus(null);
     try {
       const res = await fetch('/api/google/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, webappUrl }),
+        body: JSON.stringify({ webappUrl }),
       });
       if (res.ok) {
-        alert("URL Web App berhasil disimpan!");
+        setSyncStatus({ type: 'success', message: "URL Web App berhasil disimpan!" });
+      } else {
+        const data = await res.json();
+        setSyncStatus({ type: 'error', message: data.message || "Gagal menyimpan URL" });
       }
     } catch (err) {
       console.error("Failed to save Google settings:", err);
-      alert("Gagal menyimpan URL");
+      setSyncStatus({ type: 'error', message: "Terjadi kesalahan koneksi saat menyimpan URL" });
+    } finally {
+      setIsSavingUrl(false);
     }
   };
 
@@ -990,9 +998,10 @@ export default function App() {
                   <div className="flex gap-2">
                     <button 
                       onClick={handleSaveWebappUrl}
-                      className="flex-1 bg-gray-800 text-white px-6 py-3 rounded-xl font-bold hover:bg-black transition-all"
+                      disabled={isSavingUrl}
+                      className="flex-1 bg-gray-800 text-white px-6 py-3 rounded-xl font-bold hover:bg-black transition-all disabled:opacity-50"
                     >
-                      Simpan URL
+                      {isSavingUrl ? 'Menyimpan...' : 'Simpan URL'}
                     </button>
                     <button 
                       onClick={handleSyncGoogle}
