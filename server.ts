@@ -27,7 +27,8 @@ db.exec(`
     nama TEXT,
     nip TEXT,
     role TEXT,
-    divisi TEXT
+    divisi TEXT,
+    drive_folder_id TEXT
   );
 
   CREATE TABLE IF NOT EXISTS google_settings (
@@ -307,13 +308,25 @@ async function startServer() {
   });
 
   app.get("/api/users", async (req, res) => {
-    const url = getWebappUrl();
-    if (!url) return res.json([]);
-
     try {
-      const response = await axios.post(url, { action: "get_users" });
-      res.json(response.data.users || []);
+      const url = getWebappUrl();
+      if (url) {
+        try {
+          const response = await axios.post(url, { action: "get_users" });
+          if (response.data.users && Array.isArray(response.data.users)) {
+            const insertUser = db.prepare("INSERT OR REPLACE INTO users (username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            for (const u of response.data.users) {
+              insertUser.run(u.username, u.password || "", u.nama, u.nip || "", u.role, u.divisi || "", u.drive_folder_id || "");
+            }
+          }
+        } catch (err) {
+          console.error("Sync users from Google error:", err);
+        }
+      }
+      const users = db.prepare("SELECT * FROM users").all();
+      res.json(users);
     } catch (error) {
+      console.error("Fetch users error:", error);
       res.json([]);
     }
   });
