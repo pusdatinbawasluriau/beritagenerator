@@ -136,26 +136,33 @@ async function startServer() {
   // Google Web App Routes
   app.get("/api/google/settings", (req, res) => {
     const { userId } = req.query;
-    const settings = db.prepare("SELECT * FROM google_settings WHERE user_id = ?").get(userId) as any;
+    let settings = db.prepare("SELECT * FROM google_settings WHERE user_id = ?").get(userId) as any;
+    if (!settings) {
+      settings = db.prepare("SELECT * FROM google_settings LIMIT 1").get() as any;
+    }
     res.json({ webappUrl: settings?.webapp_url || "" });
   });
 
   app.post("/api/google/settings", (req, res) => {
     const { userId, webappUrl } = req.body;
-    const existing = db.prepare("SELECT id FROM google_settings WHERE user_id = ?").get(userId);
+    // Use a single row for global settings if userId is not provided or is 0
+    const targetId = userId || 1;
+    const existing = db.prepare("SELECT id FROM google_settings LIMIT 1").get();
     
     if (existing) {
-      db.prepare("UPDATE google_settings SET webapp_url = ? WHERE user_id = ?").run(webappUrl, userId);
+      db.prepare("UPDATE google_settings SET webapp_url = ?, user_id = ? WHERE id = ?").run(webappUrl, targetId, existing.id);
     } else {
-      db.prepare("INSERT INTO google_settings (user_id, webapp_url) VALUES (?, ?)")
-        .run(userId, webappUrl);
+      db.prepare("INSERT INTO google_settings (user_id, webapp_url) VALUES (?, ?)").run(targetId, webappUrl);
     }
     res.json({ success: true });
   });
 
   app.post("/api/google/sync", async (req, res) => {
     const { userId } = req.body;
-    const settings = db.prepare("SELECT * FROM google_settings WHERE user_id = ?").get(userId) as any;
+    let settings = db.prepare("SELECT * FROM google_settings WHERE user_id = ?").get(userId) as any;
+    if (!settings) {
+      settings = db.prepare("SELECT * FROM google_settings LIMIT 1").get() as any;
+    }
     
     if (!settings || !settings.webapp_url) {
       return res.status(400).json({ message: "URL Web App belum diatur" });
@@ -263,7 +270,8 @@ async function startServer() {
 
     // Fallback for initial setup: allow admin/admin if no URL is set
     if (!url && username === "admin" && password === "admin") {
-      return res.json({ id: 0, username: "admin", role: "admin", nama: "Administrator" });
+      const admin = db.prepare("SELECT * FROM users WHERE username = 'admin'").get() as any;
+      return res.json(admin || { id: 1, username: "admin", role: "admin", nama: "Administrator" });
     }
 
     if (!url) {
