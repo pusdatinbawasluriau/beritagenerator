@@ -1215,11 +1215,13 @@ function doPost(e) {
     var users = [];
     var headers = data[0];
     for (var i = 1; i < data.length; i++) {
-      var user = {};
-      for (var j = 0; j < headers.length; j++) {
-        user[headers[j]] = data[i][j];
+      if (data[i][1] && String(data[i][1]).trim() !== "") { // Check if username exists
+        var user = {};
+        for (var j = 0; j < headers.length; j++) {
+          user[headers[j]] = data[i][j];
+        }
+        users.push(user);
       }
-      users.push(user);
     }
     return ContentService.createTextOutput(JSON.stringify({ success: true, users: users }))
       .setMimeType(ContentService.MimeType.JSON);

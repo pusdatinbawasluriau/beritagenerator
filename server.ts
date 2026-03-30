@@ -65,6 +65,9 @@ try { db.exec("ALTER TABLE users ADD COLUMN drive_folder_id TEXT;"); } catch (e)
 try { db.exec("ALTER TABLE laporan ADD COLUMN nip_pegawai TEXT;"); } catch (e) {}
 try { db.exec("ALTER TABLE laporan ADD COLUMN tanggal_penilaian TEXT;"); } catch (e) {}
 
+// Cleanup empty users
+try { db.exec("DELETE FROM users WHERE username IS NULL OR trim(username) = '';"); } catch (e) {}
+
 // Seed default users
 console.log("Verifying users...");
 
@@ -315,10 +318,14 @@ async function startServer() {
           const response = await axios.post(url, { action: "get_users" });
           if (response.data.users && Array.isArray(response.data.users)) {
             const insertUser = db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-            const usernamesInGoogle = response.data.users.map((u: any) => u.username);
+            const usernamesInGoogle = response.data.users
+              .map((u: any) => u.username)
+              .filter((u: any) => u && String(u).trim() !== "");
             
             for (const u of response.data.users) {
-              insertUser.run(u.id, u.username, u.password || "", u.nama, u.nip || "", u.role, u.divisi || "", u.drive_folder_id || "");
+              if (u.username && String(u.username).trim() !== "") {
+                insertUser.run(u.id, u.username, u.password || "", u.nama, u.nip || "", u.role, u.divisi || "", u.drive_folder_id || "");
+              }
             }
 
             // Remove users locally that are no longer in Google Sheets (except admin)
