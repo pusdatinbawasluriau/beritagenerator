@@ -1200,7 +1200,23 @@ function doPost(e) {
     return ContentService.createTextOutput(JSON.stringify({ success: true }))
       .setMimeType(ContentService.MimeType.JSON);
   }
-}`}
+
+  if (action === "get_users") {
+    var data = userSheet.getDataRange().getValues();
+    var users = [];
+    var headers = data[0];
+    for (var i = 1; i < data.length; i++) {
+      var user = {};
+      for (var j = 0; j < headers.length; j++) {
+        user[headers[j]] = data[i][j];
+      }
+      users.push(user);
+    }
+    return ContentService.createTextOutput(JSON.stringify({ success: true, users: users }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+`}
                   </pre>
                   <p className="text-[10px] text-gray-500 mt-2 italic">* Deploy kode di atas sebagai Web App dengan akses "Anyone" agar integrasi berjalan lancar.</p>
                 </div>
