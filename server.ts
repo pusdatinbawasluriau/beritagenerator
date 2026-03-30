@@ -322,6 +322,7 @@ async function startServer() {
     if (!url) return res.status(400).json({ message: "URL not set" });
 
     try {
+      const settings = db.prepare("SELECT parent_folder_id FROM google_settings LIMIT 1").get() as any;
       const response = await axios.post(url, {
         action: "register",
         username,
@@ -329,10 +330,19 @@ async function startServer() {
         nama,
         nip,
         role,
-        divisi
+        divisi,
+        parentFolderId: settings?.parent_folder_id || ""
       });
+      
+      if (response.data.success) {
+        const { drive_folder_id } = response.data;
+        db.prepare("INSERT OR REPLACE INTO users (username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .run(username, password, nama, nip, role, divisi, drive_folder_id);
+      }
+      
       res.json(response.data);
     } catch (error) {
+      console.error("Admin user creation error:", error);
       res.status(500).json({ message: "Error" });
     }
   });

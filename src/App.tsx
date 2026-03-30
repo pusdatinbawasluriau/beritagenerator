@@ -1074,9 +1074,14 @@ function doPost(e) {
     
     // Create Folder for User
     var parentFolder;
-    if (params.parentFolderId) {
-      parentFolder = DriveApp.getFolderById(params.parentFolderId);
-    } else {
+    try {
+      if (params.parentFolderId) {
+        parentFolder = DriveApp.getFolderById(params.parentFolderId);
+      } else {
+        parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
+      }
+    } catch (e) {
+      // Fallback if ID is invalid
       parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
     }
     var folder = parentFolder.createFolder("Laporan - " + params.nama);
