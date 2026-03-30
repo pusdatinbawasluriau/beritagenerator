@@ -1164,13 +1164,16 @@ function doPost(e) {
 
   if (action === "delete_user") {
     var data = userSheet.getDataRange().getValues();
+    var usernameToDelete = String(params.username).trim().toLowerCase();
+    var deleted = false;
     for (var i = 1; i < data.length; i++) {
-      if (data[i][1] === params.username) {
+      if (String(data[i][1]).trim().toLowerCase() === usernameToDelete) {
         userSheet.deleteRow(i + 1);
+        deleted = true;
         break;
       }
     }
-    return ContentService.createTextOutput(JSON.stringify({ success: true }))
+    return ContentService.createTextOutput(JSON.stringify({ success: true, deleted: deleted }))
       .setMimeType(ContentService.MimeType.JSON);
   }
 

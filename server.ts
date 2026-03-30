@@ -258,8 +258,8 @@ async function startServer() {
       if (response.data.success) {
         const { id, drive_folder_id } = response.data;
         // Save to local SQLite for reference (especially drive_folder_id)
-        db.prepare("INSERT OR REPLACE INTO users (username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
-          .run(username, password, nama, nip, "staf", divisi, drive_folder_id);
+        db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(id, username, password, nama, nip, "staf", divisi, drive_folder_id);
         res.json({ success: true, id: id });
       } else {
         res.status(400).json({ message: response.data.message || "Gagal mendaftar" });
@@ -295,8 +295,8 @@ async function startServer() {
         console.log(`Login successful via Google Sheets for: ${username}`);
         const user = response.data.user;
         // Sync to local SQLite
-        db.prepare("INSERT OR REPLACE INTO users (username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
-          .run(user.username, user.password, user.nama, user.nip, user.role, user.divisi, user.drive_folder_id);
+        db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(user.id, user.username, user.password, user.nama, user.nip, user.role, user.divisi, user.drive_folder_id);
         res.json(user);
       } else {
         res.status(401).json({ message: response.data.message || "Username atau password salah" });
@@ -314,11 +314,11 @@ async function startServer() {
         try {
           const response = await axios.post(url, { action: "get_users" });
           if (response.data.users && Array.isArray(response.data.users)) {
-            const insertUser = db.prepare("INSERT OR REPLACE INTO users (username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            const insertUser = db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
             const usernamesInGoogle = response.data.users.map((u: any) => u.username);
             
             for (const u of response.data.users) {
-              insertUser.run(u.username, u.password || "", u.nama, u.nip || "", u.role, u.divisi || "", u.drive_folder_id || "");
+              insertUser.run(u.id, u.username, u.password || "", u.nama, u.nip || "", u.role, u.divisi || "", u.drive_folder_id || "");
             }
 
             // Remove users locally that are no longer in Google Sheets (except admin)
@@ -358,9 +358,9 @@ async function startServer() {
       });
       
       if (response.data.success) {
-        const { drive_folder_id } = response.data;
-        db.prepare("INSERT OR REPLACE INTO users (username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
-          .run(username, password, nama, nip, role, divisi, drive_folder_id);
+        const { id, drive_folder_id } = response.data;
+        db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(id, username, password, nama, nip, role, divisi, drive_folder_id);
       }
       
       res.json(response.data);
@@ -377,17 +377,29 @@ async function startServer() {
 
     try {
       // Get username first to delete from Google Sheets
-      const userToDelete = db.prepare("SELECT username FROM users WHERE id = ?").get(id) as any;
+      // Ensure id is treated as a number for the query
+      const userId = Number(id);
+      const userToDelete = db.prepare("SELECT username FROM users WHERE id = ?").get(userId) as any;
+      
       if (userToDelete) {
-        console.log(`Attempting to delete user ${userToDelete.username} from Google Sheets...`);
-        await axios.post(url, { action: "delete_user", username: userToDelete.username });
-        db.prepare("DELETE FROM users WHERE id = ?").run(id);
-        console.log(`User ${userToDelete.username} deleted successfully.`);
+        console.log(`Attempting to delete user ${userToDelete.username} (ID: ${userId}) from Google Sheets...`);
+        const response = await axios.post(url, { action: "delete_user", username: userToDelete.username });
+        
+        if (response.data.success) {
+          db.prepare("DELETE FROM users WHERE id = ?").run(userId);
+          console.log(`User ${userToDelete.username} deleted successfully from both Google Sheets and local DB.`);
+          res.json({ success: true });
+        } else {
+          console.error(`Google Sheets reported failure deleting user ${userToDelete.username}:`, response.data.message);
+          res.status(500).json({ success: false, message: response.data.message || "Gagal menghapus di Google Sheets" });
+        }
+      } else {
+        console.warn(`User with ID ${userId} not found in local DB for deletion.`);
+        res.status(404).json({ success: false, message: "Pengguna tidak ditemukan" });
       }
-      res.json({ success: true });
     } catch (error: any) {
       console.error("Delete user error:", error.message);
-      res.status(500).json({ message: "Gagal menghapus pengguna: " + error.message });
+      res.status(500).json({ success: false, message: "Gagal menghapus pengguna: " + error.message });
     }
   });
 
