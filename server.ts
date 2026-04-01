@@ -124,7 +124,7 @@ async function startServer() {
   // Helper to sync all data to Google Sheets
   async function syncAllToGoogle() {
     const settings = getGoogleSettings();
-    if (!settings.webapp_url) return;
+    if (!settings.webapp_url) return false;
 
     try {
       const laporan = db.prepare("SELECT * FROM laporan ORDER BY id DESC").all() as any[];
@@ -149,10 +149,12 @@ async function startServer() {
         }))
       };
       console.log(`Syncing ${laporan.length} reports to Google Sheets...`);
-      await axios.post(settings.webapp_url, dataToSync, { timeout: 15000 });
+      await axios.post(settings.webapp_url, dataToSync, { timeout: 30000 });
       console.log("Sync successful");
+      return true;
     } catch (err: any) {
       console.error("Auto-sync error:", err.message);
+      return false;
     }
   }
 
@@ -183,51 +185,10 @@ async function startServer() {
   });
 
   app.post("/api/google/sync", async (req, res) => {
-    const settings = getGoogleSettings();
-    
-    if (!settings.webapp_url) {
-      return res.status(400).json({ message: "URL Web App belum diatur" });
-    }
-
-    try {
-      // Get all data
-      const laporan = db.prepare("SELECT * FROM laporan ORDER BY id DESC").all() as any[];
-      
-      const dataToSync = {
-        action: "sync",
-        data: laporan.map(l => ({
-          id: l.id,
-          tanggal_input: l.tanggal,
-          tanggal_pelaporan: l.tanggal_pelaporan,
-          nama_pegawai: l.nama_pegawai,
-          nip: l.nip_pegawai,
-          divisi: l.divisi,
-          rencana_kerja: l.rencana_kerja,
-          rincian_kerja: l.rincian_kerja,
-          output: l.output,
-          bukti_link: l.bukti_link,
-          nilai_atasan: l.nilai_atasan,
-          catatan_atasan: l.catatan_atasan,
-          status: l.status,
-          penilai: l.dinilai_oleh,
-          tanggal_penilaian: l.tanggal_penilaian
-        }))
-      };
-
-      // Send to Google Apps Script Web App
-      const response = await axios.post(settings.webapp_url, dataToSync, { timeout: 10000 });
-
-      if (response.status === 200) {
-        res.json({ success: true });
-      } else {
-        throw new Error("Gagal mengirim data ke Web App");
-      }
-    } catch (error: any) {
-      console.error("Sync Error:", error.message);
-      if (error.response) {
-        console.error("Response data:", error.response.data);
-        console.error("Response status:", error.response.status);
-      }
+    const success = await syncAllToGoogle();
+    if (success) {
+      res.json({ success: true });
+    } else {
       res.status(500).json({ message: "Gagal sinkronisasi data ke Google Sheets. Pastikan URL Web App benar dan dapat menerima POST request." });
     }
   });
@@ -328,12 +289,21 @@ async function startServer() {
         try {
           const response = await axios.post(settings.webapp_url, { action: "get_users" });
           if (response.data.users && Array.isArray(response.data.users)) {
+            // Normalize keys to lowercase
+            const normalizedUsers = response.data.users.map((u: any) => {
+              const normalized: any = {};
+              Object.keys(u).forEach(key => {
+                normalized[key.toLowerCase()] = u[key];
+              });
+              return normalized;
+            });
+
             const insertUser = db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-            const usernamesInGoogle = response.data.users
+            const usernamesInGoogle = normalizedUsers
               .map((u: any) => u.username)
               .filter((u: any) => u && String(u).trim() !== "");
             
-            for (const u of response.data.users) {
+            for (const u of normalizedUsers) {
               if (u.username && String(u.username).trim() !== "") {
                 insertUser.run(u.id, u.username, u.password || "", u.nama, u.nip || "", u.role, u.divisi || "", u.drive_folder_id || "");
               }
@@ -524,26 +494,63 @@ async function startServer() {
     if (!settings.webapp_url) return res.status(400).json({ message: "URL not set" });
 
     try {
-      const response = await axios.post(settings.webapp_url, { action: "get_reports" }, { timeout: 15000 });
+      const response = await axios.post(settings.webapp_url, { action: "get_reports" }, { timeout: 30000 });
       if (response.data.reports && Array.isArray(response.data.reports)) {
-        const insertLaporan = db.prepare(`
-          INSERT OR REPLACE INTO laporan (
-            id, tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, 
-            rencana_kerja, rincian_kerja, output, bukti_link, 
-            nilai_atasan, catatan_atasan, status, dinilai_oleh, tanggal_penilaian
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        for (const r of response.data.reports) {
-          if (r.id) {
-            insertLaporan.run(
-              r.id, r.tanggal_input || "", r.tanggal_pelaporan || "", r.nama_pegawai || "", r.nip || "", r.divisi || "",
-              r.rencana_kerja || "", r.rincian_kerja || "", r.output || "", r.bukti_link || "",
-              r.nilai_atasan || "", r.catatan_atasan || "", r.status || "Pending", r.dinilai_oleh || "", r.tanggal_penilaian || ""
-            );
+        const reportsFromGoogle = response.data.reports.map((r: any) => {
+          const normalized: any = {};
+          Object.keys(r).forEach(key => {
+            normalized[key.toLowerCase()] = r[key];
+          });
+          return normalized;
+        });
+        
+        // Start transaction for atomic sync
+        const syncTransaction = db.transaction((reports: any[]) => {
+          // Get IDs from Google to handle deletions
+          const googleIds = reports.map(r => r.id).filter(id => id);
+          
+          // Delete local reports that are NOT in Google Sheets
+          if (googleIds.length > 0) {
+            const placeholders = googleIds.map(() => "?").join(",");
+            db.prepare(`DELETE FROM laporan WHERE id NOT IN (${placeholders})`).run(...googleIds);
+          } else {
+            // If Google is empty, clear local
+            db.prepare("DELETE FROM laporan").run();
           }
-        }
-        res.json({ success: true, count: response.data.reports.length });
+
+          const insertLaporan = db.prepare(`
+            INSERT OR REPLACE INTO laporan (
+              id, tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, 
+              rencana_kerja, rincian_kerja, output, bukti_link, 
+              nilai_atasan, catatan_atasan, status, dinilai_oleh, tanggal_penilaian
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+
+          for (const r of reports) {
+            if (r.id) {
+              insertLaporan.run(
+                r.id, 
+                r.tanggal_input || r.tanggal || "", 
+                r.tanggal_pelaporan || "", 
+                r.nama_pegawai || "", 
+                r.nip || r.nip_pegawai || "", 
+                r.divisi || "",
+                r.rencana_kerja || "", 
+                r.rincian_kerja || "", 
+                r.output || "", 
+                r.bukti_link || "",
+                r.nilai_atasan || "", 
+                r.catatan_atasan || "", 
+                r.status || "Pending", 
+                r.dinilai_oleh || "", 
+                r.tanggal_penilaian || ""
+              );
+            }
+          }
+        });
+
+        syncTransaction(reportsFromGoogle);
+        res.json({ success: true, count: reportsFromGoogle.length });
       } else {
         res.status(400).json({ message: "Format data tidak valid dari Google" });
       }

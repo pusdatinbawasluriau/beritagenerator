@@ -18,7 +18,8 @@ import {
   Download,
   ExternalLink,
   Code,
-  Database
+  Database,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -1099,6 +1100,12 @@ function doPost(e) {
   
   if (userSheet.getLastRow() === 0) {
     userSheet.appendRow(["id", "username", "password", "nama", "nip", "role", "divisi", "drive_folder_id"]);
+  } else {
+    // Check if drive_folder_id column exists
+    var headers = userSheet.getRange(1, 1, 1, userSheet.getLastColumn()).getValues()[0];
+    if (headers.indexOf("drive_folder_id") === -1 && headers.indexOf("Drive_folder_id") === -1) {
+      userSheet.getRange(1, userSheet.getLastColumn() + 1).setValue("drive_folder_id");
+    }
   }
   
   if (action === "register") {
@@ -1184,15 +1191,21 @@ function doPost(e) {
   }
   
   if (action === "sync") {
-    reportSheet.clearContents();
+    reportSheet.clear(); // Clear everything including formatting
     var headers = ["id", "tanggal_input", "tanggal_pelaporan", "nama_pegawai", "nip", "divisi", "rencana_kerja", "rincian_kerja", "output", "bukti_link", "nilai_atasan", "catatan_atasan", "status", "dinilai_oleh", "tanggal_penilaian"];
-    reportSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    
+    var allRows = [headers];
     if (params.data && params.data.length > 0) {
-      var rows = params.data.map(function(row) {
-        return headers.map(function(h) { return row[h] || ""; });
-      });
-      reportSheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+      for (var i = 0; i < params.data.length; i++) {
+        var row = params.data[i];
+        allRows.push(headers.map(function(h) { return row[h] || ""; }));
+      }
     }
+    
+    reportSheet.getRange(1, 1, allRows.length, headers.length).setValues(allRows);
+    // Format header
+    reportSheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#f3f3f3");
+    
     return ContentService.createTextOutput(JSON.stringify({ success: true }))
       .setMimeType(ContentService.MimeType.JSON);
   }
@@ -1247,7 +1260,8 @@ function doPost(e) {
       if (data[i][1] && String(data[i][1]).trim() !== "") { // Check if username exists
         var user = {};
         for (var j = 0; j < headers.length; j++) {
-          user[headers[j]] = data[i][j];
+          var key = String(headers[j]).toLowerCase();
+          user[key] = data[i][j];
         }
         users.push(user);
       }
@@ -1263,7 +1277,8 @@ function doPost(e) {
     for (var i = 1; i < data.length; i++) {
       var report = {};
       for (var j = 0; j < headers.length; j++) {
-        report[headers[j]] = data[i][j];
+        var key = String(headers[j]).toLowerCase();
+        report[key] = data[i][j];
       }
       reports.push(report);
     }
@@ -1372,16 +1387,25 @@ function doPost(e) {
             <div className="space-y-6">
               <div className="flex justify-between items-center">
                 <h3 className="text-xl font-bold">Manajemen Pengguna</h3>
-                <button 
-                  onClick={() => {
-                    setModalType('user');
-                    setIsModalOpen(true);
-                  }}
-                  className="bg-[#ff6f00] text-white px-4 py-2 rounded-lg flex items-center gap-2"
-                >
-                  <UserPlus className="w-4 h-4" />
-                  Tambah Pengguna
-                </button>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={fetchUsers}
+                    className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-gray-200 transition-all font-bold text-sm"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Sinkronisasi Google
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setModalType('user');
+                      setIsModalOpen(true);
+                    }}
+                    className="bg-[#ff6f00] text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-orange-700 transition-all font-bold text-sm"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    Tambah Pengguna
+                  </button>
+                </div>
               </div>
               <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
