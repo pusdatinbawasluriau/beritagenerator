@@ -410,34 +410,27 @@ async function startServer() {
         return res.status(404).json({ success: false, message: "Pengguna tidak ditemukan di database lokal" });
       }
 
-      console.log(`Attempting to delete user ${userToDelete.username} (ID: ${userId}) from Google Sheets...`);
+      // 1. Delete from local DB first
+      db.prepare("DELETE FROM users WHERE id = ?").run(userId);
       
-      try {
-        const response = await axios.post(settings.webapp_url, { 
-          action: "delete_user", 
-          username: userToDelete.username 
-        }, {
-          timeout: 15000 // 15 seconds timeout
-        });
-        
-        if (response.data && response.data.success) {
-          db.prepare("DELETE FROM users WHERE id = ?").run(userId);
-          console.log(`User ${userToDelete.username} deleted successfully from both Google Sheets and local DB.`);
-          return res.json({ success: true });
-        } else {
-          const errorMsg = response.data?.message || "Google Sheets gagal menghapus data";
-          console.error(`Google Sheets reported failure:`, errorMsg);
-          return res.status(500).json({ success: false, message: errorMsg });
+      // 2. Respond immediately
+      res.json({ success: true, message: "Pengguna berhasil dihapus dari database lokal. Sinkronisasi Google Sheets berjalan di latar belakang." });
+
+      // 3. Background sync to Google Sheets
+      (async () => {
+        try {
+          console.log(`Attempting to delete user ${userToDelete.username} (ID: ${userId}) from Google Sheets in background...`);
+          await axios.post(settings.webapp_url, { 
+            action: "delete_user", 
+            username: userToDelete.username 
+          }, {
+            timeout: 15000 // 15 seconds timeout
+          });
+          console.log(`User ${userToDelete.username} deleted successfully from Google Sheets.`);
+        } catch (axiosError: any) {
+          console.error("Axios error calling Google Web App for deletion:", axiosError.message);
         }
-      } catch (axiosError: any) {
-        console.error("Axios error calling Google Web App:", axiosError.message);
-        // Even if Google Sheets call fails, we might want to allow local deletion if the user is sure,
-        // but for now let's be strict to maintain sync.
-        return res.status(500).json({ 
-          success: false, 
-          message: "Gagal menghubungi Google Sheets: " + (axiosError.response?.data || axiosError.message) 
-        });
-      }
+      })();
     } catch (error: any) {
       console.error("Delete user route error:", error.message);
       res.status(500).json({ success: false, message: "Terjadi kesalahan internal: " + error.message });
@@ -498,32 +491,37 @@ async function startServer() {
       .run(tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, rencana_kerja, rincian_kerja, output, bukti_link);
     const laporanId = result.lastInsertRowid;
 
-    // Google Drive Month Folder Creation
-    if (settings.webapp_url && user?.drive_folder_id) {
+    // Respond immediately to reduce delay
+    res.json({ success: true, id: laporanId });
+
+    // Background sync to Google
+    (async () => {
       try {
-        const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-        const reportDate = parseDateRobust(tanggal_pelaporan);
-        if (reportDate) {
-          const monthName = monthNames[reportDate.getMonth()];
-          const year = reportDate.getFullYear();
-          const folderName = `${monthName} ${year}`;
+        // Google Drive Month Folder Creation
+        if (settings.webapp_url && user?.drive_folder_id) {
+          const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+          const reportDate = parseDateRobust(tanggal_pelaporan);
+          if (reportDate) {
+            const monthName = monthNames[reportDate.getMonth()];
+            const year = reportDate.getFullYear();
+            const folderName = `${monthName} ${year}`;
 
-          await axios.post(settings.webapp_url, {
-            action: "ensure_month_folder",
-            parentFolderId: user.drive_folder_id,
-            folderName: folderName,
-            laporanId: laporanId
-          }, { timeout: 10000 });
+            await axios.post(settings.webapp_url, {
+              action: "ensure_month_folder",
+              parentFolderId: user.drive_folder_id,
+              folderName: folderName,
+              laporanId: laporanId
+            }, { timeout: 15000 });
+          }
         }
+
+        // Sync to Google Sheets
+        syncAllToGoogle();
+        console.log(`Background sync initiated for report ${laporanId}`);
       } catch (err) {
-        console.error("Failed to ensure month folder in Google Drive:", err);
+        console.error("Background sync error:", err.message);
       }
-    }
-
-    // Auto-sync to Google Sheets
-    syncAllToGoogle();
-
-    res.json({ id: laporanId });
+    })();
   });
 
   app.put("/api/laporan/:id", (req, res) => {
