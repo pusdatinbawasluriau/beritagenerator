@@ -407,12 +407,23 @@ export default function App() {
     // Otomatis simpan ke Google Drive jika webappUrl tersedia
     if (webappUrl) {
       try {
+        console.log("Memulai proses sinkronisasi PDF ke Google Drive...");
         const updatedItem = { ...editingLaporan, ...data };
         const doc = generateLaporanPDF(updatedItem);
         const pdfBase64 = doc.output('datauristring').split(',')[1];
         
         // Cari user untuk mendapatkan drive_folder_id
-        const employee = users.find(u => u.nama?.trim().toLowerCase() === updatedItem.nama_pegawai?.trim().toLowerCase());
+        console.log("Mencari data pegawai:", updatedItem.nama_pegawai, "NIP:", updatedItem.nip_pegawai);
+        const employee = users.find(u => 
+          (u.nip && u.nip === updatedItem.nip_pegawai) || 
+          (u.nama?.trim().toLowerCase() === updatedItem.nama_pegawai?.trim().toLowerCase())
+        );
+        
+        if (employee) {
+          console.log("Pegawai ditemukan:", employee.nama, "Folder ID:", employee.drive_folder_id);
+        } else {
+          console.warn("Pegawai tidak ditemukan di daftar users. Pastikan nama/NIP sesuai.");
+        }
         
         if (employee?.drive_folder_id) {
           // Gunakan tanggal_pelaporan untuk folder bulan
@@ -445,7 +456,7 @@ export default function App() {
           const folderName = monthName ? `${monthName} ${year}` : "Laporan Lainnya";
           const safeTanggalPelaporan = String(updatedItem.tanggal_pelaporan || '').replace(/\//g, '-');
 
-          console.log(`Syncing to Google Drive: Folder=${folderName}, File=Laporan_WFA_${updatedItem.nama_pegawai}_${safeTanggalPelaporan}.pdf`);
+          console.log(`Mengirim ke Google Proxy: Folder=${folderName}, File=Laporan_WFA_${updatedItem.nama_pegawai}_${safeTanggalPelaporan}.pdf`);
 
           // Gunakan proxy backend untuk menghindari CORS dan lebih stabil
           // 1. Simpan PDF ke Drive
@@ -461,7 +472,11 @@ export default function App() {
             })
           });
           const pdfData = await pdfRes.json();
-          console.log("Save PDF Response:", pdfData);
+          console.log("Hasil simpan PDF:", pdfData);
+
+          if (!pdfData.success) {
+            console.error("Gagal simpan PDF ke Drive:", pdfData.message);
+          }
 
           // 2. Sinkronkan data penilaian ke Google Sheet
           const syncRes = await fetch('/api/google/proxy', {
@@ -473,9 +488,9 @@ export default function App() {
             })
           });
           const syncData = await syncRes.json();
-          console.log("Save Report Response:", syncData);
+          console.log("Hasil sinkronisasi Sheet:", syncData);
         } else {
-          console.warn("User drive_folder_id not found for:", updatedItem.nama_pegawai);
+          console.warn("User drive_folder_id tidak ditemukan. PDF tidak dapat disimpan ke Drive.");
         }
       } catch (err) {
         console.error("Gagal sinkronisasi otomatis ke Google:", err);
@@ -542,6 +557,7 @@ export default function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               action: 'register',
+              parentFolderId: parentFolderId,
               ...data
             })
           });
@@ -585,6 +601,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'register', // Reuse register action to create folder if not exists
+          parentFolderId: parentFolderId,
           nama: u.nama,
           nip: u.nip,
           divisi: u.divisi,
@@ -1321,16 +1338,36 @@ function doPost(e) {
 
   if (action === "save_pdf") {
     try {
-      var parentFolder = DriveApp.getFolderById(params.parentFolderId);
-      var folders = parentFolder.getFoldersByName(params.folderName);
-      var targetFolder = folders.hasNext() ? folders.next() : parentFolder.createFolder(params.folderName);
+      var folderId = params.parentFolderId;
+      if (!folderId) {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, message: "parentFolderId is required" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      var parentFolder;
+      try {
+        parentFolder = DriveApp.getFolderById(folderId);
+      } catch (e) {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, message: "Folder with ID " + folderId + " not found or no access." }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      var folderName = String(params.folderName || "Laporan Lainnya").trim();
+      var folders = parentFolder.getFoldersByName(folderName);
+      var targetFolder = folders.hasNext() ? folders.next() : parentFolder.createFolder(folderName);
       
       var blob = Utilities.newBlob(Utilities.base64Decode(params.base64), "application/pdf", params.fileName);
       var file = targetFolder.createFile(blob);
-      return ContentService.createTextOutput(JSON.stringify({ success: true, fileId: file.getId() }))
-        .setMimeType(ContentService.MimeType.JSON);
+      
+      return ContentService.createTextOutput(JSON.stringify({ 
+        success: true, 
+        fileId: file.getId(),
+        fileName: params.fileName,
+        folderName: folderName,
+        parentFolderId: folderId
+      })).setMimeType(ContentService.MimeType.JSON);
     } catch (e) {
-      return ContentService.createTextOutput(JSON.stringify({ success: false, message: e.toString() }))
+      return ContentService.createTextOutput(JSON.stringify({ success: false, message: "Error in save_pdf: " + e.toString() }))
         .setMimeType(ContentService.MimeType.JSON);
     }
   }
