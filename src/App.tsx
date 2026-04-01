@@ -404,52 +404,94 @@ export default function App() {
       setSyncAllProgress({ current: i + 1, total: finishedReports.length });
 
       try {
-        const employee = latestUsers.find((u: any) => 
-          (u.nip && String(u.nip) === String(report.nip_pegawai)) || 
-          (u.nama?.trim().toLowerCase() === report.nama_pegawai?.trim().toLowerCase())
-        );
+        const reportNip = String(report.nip_pegawai || '').trim();
+        const reportNama = String(report.nama_pegawai || '').trim().toLowerCase();
 
-        if (employee && employee.drive_folder_id) {
-          const doc = generateLaporanPDF(report);
-          const pdfBase64 = doc.output('datauristring').split(',')[1];
+        const employee = latestUsers.find((u: any) => {
+          const userNip = String(u.nip || '').trim();
+          const userNama = String(u.nama || '').trim().toLowerCase();
+          return (reportNip && userNip === reportNip) || (userNama === reportNama);
+        });
+
+        if (employee) {
+          let folderId = employee.drive_folder_id;
           
-          const dateToUse = report.tanggal_pelaporan || report.tanggal;
-          const dateObj = parseDateRobust(dateToUse);
-          
-          let monthName = "";
-          let year = "";
-          if (dateObj) {
-            const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
-            monthName = months[dateObj.getMonth()];
-            year = String(dateObj.getFullYear());
+          // If folder ID is missing, try to create/sync it
+          if (!folderId && webappUrl) {
+            console.log(`Folder ID missing for ${employee.nama}, attempting to create/sync...`);
+            const syncRes = await fetch('/api/google/proxy', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'register',
+                parentFolderId: parentFolderId,
+                nama: employee.nama,
+                nip: employee.nip,
+                divisi: employee.divisi,
+                username: employee.username,
+                password: employee.password,
+                role: employee.role
+              })
+            });
+            const syncData = await syncRes.json();
+            if (syncData.success) {
+              folderId = syncData.drive_folder_id;
+              // Update local DB
+              await fetch(`/api/users/${employee.id}/folder`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ drive_folder_id: folderId })
+              });
+            }
           }
 
-          const folderName = monthName ? `${monthName} ${year}` : "Laporan Lainnya";
-          const safeTanggalPelaporan = String(report.tanggal_pelaporan || '').replace(/\//g, '-');
-          const fileName = `Laporan_WFA_${report.nama_pegawai}_${safeTanggalPelaporan}.pdf`;
+          if (folderId) {
+            const doc = generateLaporanPDF(report);
+            const pdfBase64 = doc.output('datauristring').split(',')[1];
+            
+            const dateToUse = report.tanggal_pelaporan || report.tanggal;
+            const dateObj = parseDateRobust(dateToUse);
+            
+            let monthName = "";
+            let year = "";
+            if (dateObj) {
+              const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+              monthName = months[dateObj.getMonth()];
+              year = String(dateObj.getFullYear());
+            }
 
-          const pdfRes = await fetch('/api/google/proxy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'save_pdf',
-              parentFolderId: employee.drive_folder_id,
-              folderName: folderName,
-              fileName: fileName,
-              base64: pdfBase64
-            })
-          });
-          const pdfData = await pdfRes.json();
-          if (pdfData.success) {
-            successCount++;
+            const folderName = monthName ? `${monthName} ${year}` : "Laporan Lainnya";
+            const safeTanggalPelaporan = String(report.tanggal_pelaporan || '').replace(/\//g, '-');
+            const fileName = `Laporan_WFA_${report.nama_pegawai}_${safeTanggalPelaporan}.pdf`;
+
+            const pdfRes = await fetch('/api/google/proxy', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'save_pdf',
+                parentFolderId: folderId,
+                folderName: folderName,
+                fileName: fileName,
+                base64: pdfBase64
+              })
+            });
+            const pdfData = await pdfRes.json();
+            if (pdfData.success) {
+              successCount++;
+            } else {
+              console.error(`Google Drive Error for report ${report.id}:`, pdfData.message);
+              failCount++;
+            }
           } else {
+            console.warn(`Report ${report.id}: Employee found but drive_folder_id missing and could not be created.`);
             failCount++;
           }
         } else {
+          console.warn(`Report ${report.id}: Employee not found in database.`, { nama: report.nama_pegawai, nip: report.nip_pegawai });
           failCount++;
         }
-      } catch (err) {
-        console.error(`Error syncing report ${report.id}:`, err);
+      } catch (err: any) {
+        console.error(`Error syncing report ${report.id}:`, err.message || err);
         failCount++;
       }
     }
@@ -521,15 +563,54 @@ export default function App() {
         setUsers(latestUsers);
         
         console.log("Mencari data pegawai:", updatedItem.nama_pegawai, "NIP:", updatedItem.nip_pegawai);
-        const employee = latestUsers.find((u: any) => 
-          (u.nip && String(u.nip) === String(updatedItem.nip_pegawai)) || 
-          (u.nama?.trim().toLowerCase() === updatedItem.nama_pegawai?.trim().toLowerCase())
-        );
+        const reportNip = String(updatedItem.nip_pegawai || '').trim();
+        const reportNama = String(updatedItem.nama_pegawai || '').trim().toLowerCase();
+
+        const employee = latestUsers.find((u: any) => {
+          const userNip = String(u.nip || '').trim();
+          const userNama = String(u.nama || '').trim().toLowerCase();
+          return (reportNip && userNip === reportNip) || (userNama === reportNama);
+        });
         
         if (employee) {
-          console.log("Pegawai ditemukan:", employee.nama, "Folder ID:", employee.drive_folder_id);
+          let folderId = employee.drive_folder_id;
+
+          // If folder ID is missing, try to create/sync it
+          if (!folderId && webappUrl) {
+            console.log(`Folder ID missing for ${employee.nama}, attempting to create/sync...`);
+            const syncRes = await fetch('/api/google/proxy', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'register',
+                parentFolderId: parentFolderId,
+                nama: employee.nama,
+                nip: employee.nip,
+                divisi: employee.divisi,
+                username: employee.username,
+                password: employee.password,
+                role: employee.role
+              })
+            });
+            const syncData = await syncRes.json();
+            if (syncData.success) {
+              folderId = syncData.drive_folder_id;
+              // Update local DB
+              await fetch(`/api/users/${employee.id}/folder`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ drive_folder_id: folderId })
+              });
+              console.log(`Berhasil membuat folder otomatis untuk ${employee.nama}: ${folderId}`);
+            } else {
+              console.error(`Gagal membuat folder otomatis: ${syncData.message}`);
+              alert(`Gagal membuat folder Google Drive otomatis: ${syncData.message}`);
+            }
+          }
+
+          console.log("Pegawai ditemukan:", employee.nama, "Folder ID:", folderId);
           
-          if (employee.drive_folder_id) {
+          if (folderId) {
             // Gunakan tanggal_pelaporan untuk folder bulan
             const dateToUse = updatedItem.tanggal_pelaporan || updatedItem.tanggal;
             const dateObj = parseDateRobust(dateToUse);
@@ -555,7 +636,7 @@ export default function App() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 action: 'save_pdf',
-                parentFolderId: employee.drive_folder_id,
+                parentFolderId: folderId,
                 folderName: folderName,
                 fileName: fileName,
                 base64: pdfBase64
@@ -1266,29 +1347,56 @@ export default function App() {
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500"
                     />
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button 
-                      onClick={handleSaveWebappUrl}
-                      disabled={isSavingUrl}
-                      className="flex-1 min-w-[120px] bg-gray-800 text-white px-4 py-3 rounded-xl font-bold hover:bg-black transition-all disabled:opacity-50 text-sm"
-                    >
-                      {isSavingUrl ? 'Menyimpan...' : 'Simpan URL'}
-                    </button>
-                    <button 
-                      onClick={handleSyncGoogle}
-                      disabled={isSyncing}
-                      className="flex-1 min-w-[120px] bg-green-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-green-700 transition-all disabled:opacity-50 text-sm"
-                    >
-                      {isSyncing ? 'Sinkron...' : 'Kirim ke Google'}
-                    </button>
-                    <button 
-                      onClick={handlePullGoogle}
-                      disabled={isPulling}
-                      className="flex-1 min-w-[120px] bg-blue-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-blue-700 transition-all disabled:opacity-50 text-sm"
-                    >
-                      {isPulling ? 'Menarik...' : 'Tarik dari Google'}
-                    </button>
-                  </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button 
+                        onClick={handleSaveWebappUrl}
+                        disabled={isSavingUrl}
+                        className="flex-1 min-w-[120px] bg-gray-800 text-white px-4 py-3 rounded-xl font-bold hover:bg-black transition-all disabled:opacity-50 text-sm"
+                      >
+                        {isSavingUrl ? 'Menyimpan...' : 'Simpan URL'}
+                      </button>
+                      <button 
+                        onClick={async () => {
+                          if (!webappUrl) return alert("URL Web App kosong");
+                          setIsSyncing(true);
+                          try {
+                            const res = await fetch('/api/google/proxy', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ action: 'test_connection', parentFolderId })
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                              alert(`Koneksi Berhasil!\nSpreadsheet: ${data.spreadsheetName}\nID: ${data.spreadsheetId}`);
+                            } else {
+                              alert(`Koneksi Gagal: ${data.message}`);
+                            }
+                          } catch (err) {
+                            alert("Gagal menghubungi Google Web App. Periksa URL Anda.");
+                          } finally {
+                            setIsSyncing(false);
+                          }
+                        }}
+                        disabled={isSyncing || !webappUrl}
+                        className="flex-1 min-w-[120px] bg-purple-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-purple-700 transition-all disabled:opacity-50 text-sm"
+                      >
+                        {isSyncing ? 'Testing...' : 'Test Koneksi'}
+                      </button>
+                      <button 
+                        onClick={handleSyncGoogle}
+                        disabled={isSyncing}
+                        className="flex-1 min-w-[120px] bg-green-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-green-700 transition-all disabled:opacity-50 text-sm"
+                      >
+                        {isSyncing ? 'Sinkron...' : 'Kirim ke Google'}
+                      </button>
+                      <button 
+                        onClick={handlePullGoogle}
+                        disabled={isPulling}
+                        className="flex-1 min-w-[120px] bg-blue-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-blue-700 transition-all disabled:opacity-50 text-sm"
+                      >
+                        {isPulling ? 'Menarik...' : 'Tarik dari Google'}
+                      </button>
+                    </div>
                 </div>
 
                 {syncStatus && (
@@ -1382,13 +1490,24 @@ function doPost(e) {
     }
   }
   
+  if (action === "test_connection") {
+    return ContentService.createTextOutput(JSON.stringify({ 
+      success: true, 
+      message: "Koneksi ke Google Apps Script berhasil!",
+      spreadsheetName: ss.getName(),
+      spreadsheetId: ss.getId(),
+      parentFolderId: params.parentFolderId || "Not provided"
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
   if (action === "register") {
     var data = userSheet.getDataRange().getValues();
     var folderId = "";
     var found = false;
+    var usernameToMatch = String(params.username || "").trim().toLowerCase();
     
     for (var i = 1; i < data.length; i++) {
-      if (data[i][1] === params.username) {
+      if (String(data[i][1]).trim().toLowerCase() === usernameToMatch) {
         found = true;
         folderId = data[i][7]; // Get existing folder ID if any
         break;
@@ -1416,8 +1535,13 @@ function doPost(e) {
     }
     
     if (!folderId) {
-      var folder = parentFolder.createFolder("Laporan - " + params.nama);
-      folderId = folder.getId();
+      try {
+        var folder = parentFolder.createFolder("Laporan - " + (params.nama || "Tanpa Nama"));
+        folderId = folder.getId();
+      } catch (e) {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, message: "Gagal membuat folder: " + e.toString() }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
     }
     
     if (!found) {
@@ -1431,7 +1555,7 @@ function doPost(e) {
     } else {
       // Update existing user with folderId if it was missing
       for (var i = 1; i < data.length; i++) {
-        if (data[i][1] === params.username) {
+        if (String(data[i][1]).trim().toLowerCase() === usernameToMatch) {
           userSheet.getRange(i + 1, 8).setValue(folderId);
           break;
         }
@@ -1439,7 +1563,7 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({ 
         success: true, 
         drive_folder_id: folderId,
-        message: "Updated existing user with new folder"
+        message: "Folder created and user updated"
       })).setMimeType(ContentService.MimeType.JSON);
     }
   }
@@ -1484,11 +1608,6 @@ function doPost(e) {
   if (action === "save_pdf") {
     try {
       var folderId = params.parentFolderId;
-      if (!folderId) {
-        return ContentService.createTextOutput(JSON.stringify({ success: false, message: "parentFolderId is required" }))
-          .setMimeType(ContentService.MimeType.JSON);
-      }
-      
       var parentFolder;
       try {
         parentFolder = DriveApp.getFolderById(folderId);

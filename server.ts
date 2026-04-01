@@ -461,14 +461,44 @@ async function startServer() {
     const { tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, rencana_kerja, rincian_kerja, output, bukti_link } = req.body;
     
     // Find user to get drive_folder_id
-    const user = db.prepare("SELECT id, drive_folder_id FROM users WHERE (nip = ? AND nip != '') OR nama = ?").get(nip_pegawai, nama_pegawai) as any;
+    const reportNip = String(nip_pegawai || '').trim();
+    const reportNama = String(nama_pegawai || '').trim();
     
+    let user = db.prepare("SELECT * FROM users WHERE (nip = ? AND nip != '') OR nama = ?").get(reportNip, reportNama) as any;
+    
+    const settings = getGoogleSettings();
+    
+    // If user exists but has no drive_folder_id, try to create it now
+    if (user && !user.drive_folder_id && settings.webapp_url) {
+      try {
+        console.log(`Folder ID missing for ${user.nama} during report submission, creating...`);
+        const response = await axios.post(settings.webapp_url, {
+          action: "register",
+          parentFolderId: settings.parent_folder_id,
+          nama: user.nama,
+          nip: user.nip,
+          divisi: user.divisi,
+          username: user.username,
+          password: user.password,
+          role: user.role
+        }, { timeout: 15000 });
+
+        if (response.data.success && response.data.drive_folder_id) {
+          const folderId = response.data.drive_folder_id;
+          db.prepare("UPDATE users SET drive_folder_id = ? WHERE id = ?").run(folderId, user.id);
+          user.drive_folder_id = folderId;
+          console.log(`Successfully created folder for ${user.nama}: ${folderId}`);
+        }
+      } catch (err) {
+        console.error("Failed to auto-create folder during report submission:", err);
+      }
+    }
+
     const result = db.prepare("INSERT INTO laporan (tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, rencana_kerja, rincian_kerja, output, bukti_link, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')")
       .run(tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, rencana_kerja, rincian_kerja, output, bukti_link);
     const laporanId = result.lastInsertRowid;
 
     // Google Drive Month Folder Creation
-    const settings = getGoogleSettings();
     if (settings.webapp_url && user?.drive_folder_id) {
       try {
         const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
