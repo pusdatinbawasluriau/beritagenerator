@@ -802,7 +802,7 @@ export default function App() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8">
+        <div className="flex-1 overflow-y-auto p-8 flex flex-col">
           {view === 'dashboard' && (
             <div className="space-y-8">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1386,7 +1386,7 @@ function doPost(e) {
             </div>
           )}
 
-          <footer className="mt-auto py-6 text-center text-gray-400 text-sm border-t border-gray-50">
+          <footer className="mt-auto pt-10 pb-6 text-center text-gray-400 text-xs border-t border-gray-50">
             Pusdatin Bawaslu Provinsi Riau @ 2026
           </footer>
         </div>
