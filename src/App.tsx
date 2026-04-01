@@ -100,6 +100,20 @@ export default function App() {
     }
   };
 
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return '-';
+    try {
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return dateStr; // Return as is if invalid
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}/${month}/${year}`;
+    } catch (e) {
+      return dateStr;
+    }
+  };
+
   const fetchUsers = async () => {
     const res = await fetch('/api/users');
     const data = await res.json();
@@ -398,18 +412,44 @@ export default function App() {
         const pdfBase64 = doc.output('datauristring').split(',')[1];
         
         // Cari user untuk mendapatkan drive_folder_id
-        const employee = users.find(u => u.nama === updatedItem.nama_pegawai);
+        const employee = users.find(u => u.nama?.trim().toLowerCase() === updatedItem.nama_pegawai?.trim().toLowerCase());
+        
         if (employee?.drive_folder_id) {
-          // Gunakan tanggal dari laporan untuk folder bulan (hindari masalah timezone)
-          const [y, m] = updatedItem.tanggal.split('-').map(Number);
-          const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
-          const monthName = months[m - 1];
-          const folderName = `${monthName} ${y}`;
+          // Gunakan tanggal_pelaporan untuk folder bulan
+          const dateToUse = updatedItem.tanggal_pelaporan || updatedItem.tanggal;
+          let monthName = "";
+          let year = "";
+          
+          try {
+            // Coba parsing format YYYY-MM-DD atau DD/MM/YYYY
+            let dateObj;
+            if (dateToUse.includes('-')) {
+              const [y, m, d] = dateToUse.split('-');
+              dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+            } else if (dateToUse.includes('/')) {
+              const [d, m, y] = dateToUse.split('/');
+              dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+            } else {
+              dateObj = new Date(dateToUse);
+            }
+
+            if (!isNaN(dateObj.getTime())) {
+              const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+              monthName = months[dateObj.getMonth()];
+              year = String(dateObj.getFullYear());
+            }
+          } catch (e) {
+            console.error("Error parsing date for folder name:", e);
+          }
+
+          const folderName = monthName ? `${monthName} ${year}` : "Laporan Lainnya";
           const safeTanggalPelaporan = String(updatedItem.tanggal_pelaporan || '').replace(/\//g, '-');
+
+          console.log(`Syncing to Google Drive: Folder=${folderName}, File=Laporan_WFA_${updatedItem.nama_pegawai}_${safeTanggalPelaporan}.pdf`);
 
           // Gunakan proxy backend untuk menghindari CORS dan lebih stabil
           // 1. Simpan PDF ke Drive
-          await fetch('/api/google/proxy', {
+          const pdfRes = await fetch('/api/google/proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -420,9 +460,11 @@ export default function App() {
               base64: pdfBase64
             })
           });
+          const pdfData = await pdfRes.json();
+          console.log("Save PDF Response:", pdfData);
 
           // 2. Sinkronkan data penilaian ke Google Sheet
-          await fetch('/api/google/proxy', {
+          const syncRes = await fetch('/api/google/proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -430,6 +472,10 @@ export default function App() {
               report: updatedItem
             })
           });
+          const syncData = await syncRes.json();
+          console.log("Save Report Response:", syncData);
+        } else {
+          console.warn("User drive_folder_id not found for:", updatedItem.nama_pegawai);
         }
       } catch (err) {
         console.error("Gagal sinkronisasi otomatis ke Google:", err);
@@ -485,18 +531,86 @@ export default function App() {
       role: formData.get('role'),
     };
 
-    const res = await fetch('/api/users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
+    setIsSyncing(true);
+    try {
+      // 1. Register to Google Sheets and create folder
+      let drive_folder_id = "";
+      if (webappUrl) {
+        try {
+          const googleRes = await fetch('/api/google/proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'register',
+              ...data
+            })
+          });
+          const googleData = await googleRes.json();
+          if (googleData.success) {
+            drive_folder_id = googleData.drive_folder_id;
+          }
+        } catch (err) {
+          console.error("Gagal membuat folder di Google:", err);
+        }
+      }
 
-    if (res.ok) {
-      setIsModalOpen(false);
-      fetchUsers();
-    } else {
-      const err = await res.json();
-      alert(err.message || 'Gagal menambahkan pengguna');
+      // 2. Save to local database
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...data, drive_folder_id }),
+      });
+
+      if (res.ok) {
+        setIsModalOpen(false);
+        fetchUsers();
+      } else {
+        const err = await res.json();
+        alert(err.message || 'Gagal menambahkan pengguna');
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleSyncUserFolder = async (u: any) => {
+    if (!webappUrl) {
+      alert("Silakan masukkan URL Web App terlebih dahulu");
+      return;
+    }
+    setIsSyncing(true);
+    try {
+      const res = await fetch('/api/google/proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'register', // Reuse register action to create folder if not exists
+          nama: u.nama,
+          nip: u.nip,
+          divisi: u.divisi,
+          username: u.username,
+          password: u.password,
+          role: u.role
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Update local DB with new folder ID
+        await fetch(`/api/users/${u.id}/folder`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ drive_folder_id: data.drive_folder_id })
+        });
+        alert(`Berhasil sinkronisasi folder untuk ${u.nama}`);
+        fetchUsers();
+      } else {
+        alert("Gagal sinkronisasi folder: " + data.message);
+      }
+    } catch (err) {
+      console.error("Sync folder error:", err);
+      alert("Terjadi kesalahan saat sinkronisasi folder");
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -566,7 +680,7 @@ export default function App() {
         item.rincian_kerja,
         item.rencana_kerja,
         item.output,
-        item.tanggal_pelaporan,
+        formatDate(item.tanggal_pelaporan),
         item.bukti_link
       ]],
       theme: 'grid',
@@ -632,15 +746,16 @@ export default function App() {
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
     
-    const formatDate = (dateStr: string) => {
+    const formatDateIndo = (dateStr: string) => {
       if (!dateStr) return '-';
       const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
       const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return dateStr;
       return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
     };
 
     const signatureCenterX = pageWidth - 60;
-    doc.text(`Pekanbaru, ${formatDate(item.tanggal)}`, signatureCenterX, finalY, { align: 'center' });
+    doc.text(`Pekanbaru, ${formatDateIndo(item.tanggal)}`, signatureCenterX, finalY, { align: 'center' });
     doc.text(`Kepala Bagian ${item.divisi}`, signatureCenterX, finalY + 7, { align: 'center' });
     
     doc.setFont('helvetica', 'bold');
@@ -983,7 +1098,7 @@ export default function App() {
                     <tbody className="divide-y divide-gray-50">
                       {laporan.slice(0, 5).map((item) => (
                         <tr key={item.id} className="text-sm">
-                          <td className="py-4">{item.tanggal}</td>
+                          <td className="py-4">{formatDate(item.tanggal)}</td>
                           <td className="py-4 font-medium">{item.nama_pegawai}</td>
                           <td className="py-4">
                             <span className={`px-3 py-1 rounded-full text-xs font-medium ${
@@ -1107,14 +1222,26 @@ function doPost(e) {
   
   if (action === "register") {
     var data = userSheet.getDataRange().getValues();
+    var folderId = "";
+    var found = false;
+    
     for (var i = 1; i < data.length; i++) {
       if (data[i][1] === params.username) {
-        return ContentService.createTextOutput(JSON.stringify({ success: false, message: "Username sudah ada" }))
-          .setMimeType(ContentService.MimeType.JSON);
+        found = true;
+        folderId = data[i][7]; // Get existing folder ID if any
+        break;
       }
     }
     
-    // Create Folder for User
+    if (found && folderId) {
+      return ContentService.createTextOutput(JSON.stringify({ 
+        success: true, 
+        drive_folder_id: folderId,
+        message: "User already exists, returning existing folder"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Create Folder for User if not found or folderId is empty
     var parentFolder;
     try {
       if (params.parentFolderId) {
@@ -1123,20 +1250,36 @@ function doPost(e) {
         parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
       }
     } catch (e) {
-      // Fallback if ID is invalid
       parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
     }
-    var folder = parentFolder.createFolder("Laporan - " + params.nama);
-    var folderId = folder.getId();
     
-    var newId = new Date().getTime(); // Use timestamp for unique ID
-    userSheet.appendRow([newId, params.username, params.password, params.nama, params.nip, params.role, params.divisi, folderId]);
+    if (!folderId) {
+      var folder = parentFolder.createFolder("Laporan - " + params.nama);
+      folderId = folder.getId();
+    }
     
-    return ContentService.createTextOutput(JSON.stringify({ 
-      success: true, 
-      id: newId, 
-      drive_folder_id: folderId 
-    })).setMimeType(ContentService.MimeType.JSON);
+    if (!found) {
+      var newId = new Date().getTime();
+      userSheet.appendRow([newId, params.username, params.password, params.nama, params.nip, params.role, params.divisi, folderId]);
+      return ContentService.createTextOutput(JSON.stringify({ 
+        success: true, 
+        id: newId, 
+        drive_folder_id: folderId 
+      })).setMimeType(ContentService.MimeType.JSON);
+    } else {
+      // Update existing user with folderId if it was missing
+      for (var i = 1; i < data.length; i++) {
+        if (data[i][1] === params.username) {
+          userSheet.getRange(i + 1, 8).setValue(folderId);
+          break;
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({ 
+        success: true, 
+        drive_folder_id: folderId,
+        message: "Updated existing user with new folder"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
   }
   
   if (action === "login") {
@@ -1341,7 +1484,7 @@ function doPost(e) {
                       {laporan.map((item, index) => (
                         <tr key={item.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-6 py-4 text-sm">{index + 1}</td>
-                          <td className="px-6 py-4 text-sm">{item.tanggal}</td>
+                          <td className="px-6 py-4 text-sm">{formatDate(item.tanggal)}</td>
                           <td className="px-6 py-4 text-sm font-medium">{item.nama_pegawai}</td>
                           <td className="px-6 py-4 text-sm text-gray-500">{item.divisi}</td>
                           <td className="px-6 py-4">
@@ -1427,6 +1570,7 @@ function doPost(e) {
                         <th className="px-6 py-4 font-semibold">Username</th>
                         <th className="px-6 py-4 font-semibold">Divisi</th>
                         <th className="px-6 py-4 font-semibold">Role</th>
+                        <th className="px-6 py-4 font-semibold">Folder ID</th>
                         <th className="px-6 py-4 font-semibold">Aksi</th>
                       </tr>
                     </thead>
@@ -1445,15 +1589,28 @@ function doPost(e) {
                               {u.role}
                             </span>
                           </td>
+                          <td className="px-6 py-4 text-[10px] text-gray-400 font-mono truncate max-w-[100px]">
+                            {u.drive_folder_id || 'Belum ada'}
+                          </td>
                           <td className="px-6 py-4">
-                            {u.username !== 'admin' && (
+                            <div className="flex items-center gap-2">
                               <button 
-                                onClick={() => handleDeleteUser(u.id)}
-                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
+                                onClick={() => handleSyncUserFolder(u)}
+                                className="p-2 text-[#ff6f00] hover:bg-orange-50 rounded-lg"
+                                title="Sinkronkan Folder Google"
                               >
-                                <Trash2 className="w-4 h-4" />
+                                <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
                               </button>
-                            )}
+                              {u.username !== 'admin' && (
+                                <button 
+                                  onClick={() => handleDeleteUser(u.id)}
+                                  className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
+                                  title="Hapus"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -1673,7 +1830,7 @@ function doPost(e) {
                       </div>
                       <div className="space-y-1">
                         <p className="text-xs text-gray-400 uppercase font-bold">Tanggal Pelaporan</p>
-                        <p className="font-medium">{editingLaporan.tanggal_pelaporan}</p>
+                        <p className="font-medium">{formatDate(editingLaporan.tanggal_pelaporan)}</p>
                       </div>
                       <div className="space-y-1">
                         <p className="text-xs text-gray-400 uppercase font-bold">Output</p>

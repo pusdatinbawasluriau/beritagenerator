@@ -357,6 +357,13 @@ async function startServer() {
     }
   });
 
+  app.put("/api/users/:id/folder", (req, res) => {
+    const { id } = req.params;
+    const { drive_folder_id } = req.body;
+    db.prepare("UPDATE users SET drive_folder_id = ? WHERE id = ?").run(drive_folder_id, id);
+    res.json({ success: true });
+  });
+
   app.delete("/api/users/:id", async (req, res) => {
     const { id } = req.params;
     const settings = getGoogleSettings();
