@@ -68,6 +68,24 @@ try { db.exec("ALTER TABLE laporan ADD COLUMN tanggal_penilaian TEXT;"); } catch
 // Cleanup empty users
 try { db.exec("DELETE FROM users WHERE username IS NULL OR trim(username) = '';"); } catch (e) {}
 
+// Helper to get Google settings (prioritize env vars)
+function getGoogleSettings() {
+  const webapp_url = process.env.GOOGLE_WEBAPP_URL || "";
+  const parent_folder_id = process.env.GOOGLE_PARENT_FOLDER_ID || "";
+
+  // If both are in env, use them
+  if (webapp_url && parent_folder_id) {
+    return { webapp_url, parent_folder_id };
+  }
+
+  // Otherwise, fallback to DB but still prefer env if only one is set
+  const dbSettings = db.prepare("SELECT webapp_url, parent_folder_id FROM google_settings LIMIT 1").get() as any;
+  return {
+    webapp_url: webapp_url || dbSettings?.webapp_url || "",
+    parent_folder_id: parent_folder_id || dbSettings?.parent_folder_id || ""
+  };
+}
+
 // Seed default users
 console.log("Verifying users...");
 
@@ -105,8 +123,8 @@ async function startServer() {
 
   // Helper to sync all data to Google Sheets
   async function syncAllToGoogle() {
-    const settings = db.prepare("SELECT webapp_url FROM google_settings LIMIT 1").get() as any;
-    if (!settings || !settings.webapp_url) return;
+    const settings = getGoogleSettings();
+    if (!settings.webapp_url) return;
 
     try {
       const laporan = db.prepare("SELECT * FROM laporan ORDER BY id DESC").all() as any[];
@@ -140,10 +158,10 @@ async function startServer() {
 
   // Google Web App Routes
   app.get("/api/google/settings", (req, res) => {
-    const settings = db.prepare("SELECT webapp_url, parent_folder_id FROM google_settings LIMIT 1").get() as any;
+    const settings = getGoogleSettings();
     res.json({ 
-      webappUrl: settings?.webapp_url || "",
-      parentFolderId: settings?.parent_folder_id || ""
+      webappUrl: settings.webapp_url,
+      parentFolderId: settings.parent_folder_id
     });
   });
 
@@ -165,9 +183,9 @@ async function startServer() {
   });
 
   app.post("/api/google/sync", async (req, res) => {
-    const settings = db.prepare("SELECT webapp_url FROM google_settings LIMIT 1").get() as any;
+    const settings = getGoogleSettings();
     
-    if (!settings || !settings.webapp_url) {
+    if (!settings.webapp_url) {
       return res.status(400).json({ message: "URL Web App belum diatur" });
     }
 
@@ -230,24 +248,17 @@ async function startServer() {
     res.json(data);
   });
 
-  // Helper to get Google Web App URL
-  function getWebappUrl() {
-    const settings = db.prepare("SELECT webapp_url FROM google_settings LIMIT 1").get() as any;
-    return settings?.webapp_url || process.env.GOOGLE_WEBAPP_URL || "";
-  }
-
   // API Routes
   app.post("/api/register", async (req, res) => {
     const { username, password, nama, nip, divisi } = req.body;
-    const url = getWebappUrl();
+    const settings = getGoogleSettings();
 
-    if (!url) {
+    if (!settings.webapp_url) {
       return res.status(400).json({ message: "URL Google Web App belum diatur di database/env" });
     }
 
     try {
-      const settings = db.prepare("SELECT parent_folder_id FROM google_settings LIMIT 1").get() as any;
-      const response = await axios.post(url, {
+      const response = await axios.post(settings.webapp_url, {
         action: "register",
         username,
         password,
@@ -255,7 +266,7 @@ async function startServer() {
         nip,
         role: "staf",
         divisi,
-        parentFolderId: settings?.parent_folder_id || ""
+        parentFolderId: settings.parent_folder_id
       });
 
       if (response.data.success) {
@@ -275,20 +286,20 @@ async function startServer() {
 
   app.post("/api/login", async (req, res) => {
     const { username, password } = req.body;
-    const url = getWebappUrl();
+    const settings = getGoogleSettings();
 
     // Fallback for initial setup: allow admin/admin if no URL is set
-    if (!url && username === "admin" && password === "admin") {
+    if (!settings.webapp_url && username === "admin" && password === "admin") {
       const admin = db.prepare("SELECT * FROM users WHERE username = 'admin'").get() as any;
       return res.json(admin || { id: 1, username: "admin", role: "admin", nama: "Administrator" });
     }
 
-    if (!url) {
+    if (!settings.webapp_url) {
       return res.status(400).json({ message: "URL Google Web App belum diatur. Gunakan admin/admin untuk masuk pertama kali." });
     }
 
     try {
-      const response = await axios.post(url, {
+      const response = await axios.post(settings.webapp_url, {
         action: "login",
         username,
         password
@@ -312,10 +323,10 @@ async function startServer() {
 
   app.get("/api/users", async (req, res) => {
     try {
-      const url = getWebappUrl();
-      if (url) {
+      const settings = getGoogleSettings();
+      if (settings.webapp_url) {
         try {
-          const response = await axios.post(url, { action: "get_users" });
+          const response = await axios.post(settings.webapp_url, { action: "get_users" });
           if (response.data.users && Array.isArray(response.data.users)) {
             const insertUser = db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
             const usernamesInGoogle = response.data.users
@@ -348,12 +359,11 @@ async function startServer() {
 
   app.post("/api/users", async (req, res) => {
     const { username, password, nama, nip, role, divisi } = req.body;
-    const url = getWebappUrl();
-    if (!url) return res.status(400).json({ message: "URL not set" });
+    const settings = getGoogleSettings();
+    if (!settings.webapp_url) return res.status(400).json({ message: "URL not set" });
 
     try {
-      const settings = db.prepare("SELECT parent_folder_id FROM google_settings LIMIT 1").get() as any;
-      const response = await axios.post(url, {
+      const response = await axios.post(settings.webapp_url, {
         action: "register",
         username,
         password,
@@ -361,7 +371,7 @@ async function startServer() {
         nip,
         role,
         divisi,
-        parentFolderId: settings?.parent_folder_id || ""
+        parentFolderId: settings.parent_folder_id
       });
       
       if (response.data.success) {
@@ -379,8 +389,8 @@ async function startServer() {
 
   app.delete("/api/users/:id", async (req, res) => {
     const { id } = req.params;
-    const url = getWebappUrl();
-    if (!url) return res.status(400).json({ success: false, message: "URL not set" });
+    const settings = getGoogleSettings();
+    if (!settings.webapp_url) return res.status(400).json({ success: false, message: "URL not set" });
 
     try {
       // Get username first to delete from Google Sheets
@@ -395,7 +405,7 @@ async function startServer() {
       console.log(`Attempting to delete user ${userToDelete.username} (ID: ${userId}) from Google Sheets...`);
       
       try {
-        const response = await axios.post(url, { 
+        const response = await axios.post(settings.webapp_url, { 
           action: "delete_user", 
           username: userToDelete.username 
         }, {
@@ -450,8 +460,8 @@ async function startServer() {
     const laporanId = result.lastInsertRowid;
 
     // Google Drive Month Folder Creation
-    const settings = db.prepare("SELECT webapp_url FROM google_settings LIMIT 1").get() as any;
-    if (settings?.webapp_url && user?.drive_folder_id) {
+    const settings = getGoogleSettings();
+    if (settings.webapp_url && user?.drive_folder_id) {
       try {
         const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
         const reportDate = new Date(tanggal_pelaporan);
@@ -507,6 +517,40 @@ async function startServer() {
     syncAllToGoogle();
 
     res.json({ success: true });
+  });
+
+  app.post("/api/google/pull", async (req, res) => {
+    const settings = getGoogleSettings();
+    if (!settings.webapp_url) return res.status(400).json({ message: "URL not set" });
+
+    try {
+      const response = await axios.post(settings.webapp_url, { action: "get_reports" }, { timeout: 15000 });
+      if (response.data.reports && Array.isArray(response.data.reports)) {
+        const insertLaporan = db.prepare(`
+          INSERT OR REPLACE INTO laporan (
+            id, tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, 
+            rencana_kerja, rincian_kerja, output, bukti_link, 
+            nilai_atasan, catatan_atasan, status, dinilai_oleh, tanggal_penilaian
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        for (const r of response.data.reports) {
+          if (r.id) {
+            insertLaporan.run(
+              r.id, r.tanggal_input || "", r.tanggal_pelaporan || "", r.nama_pegawai || "", r.nip || "", r.divisi || "",
+              r.rencana_kerja || "", r.rincian_kerja || "", r.output || "", r.bukti_link || "",
+              r.nilai_atasan || "", r.catatan_atasan || "", r.status || "Pending", r.dinilai_oleh || "", r.tanggal_penilaian || ""
+            );
+          }
+        }
+        res.json({ success: true, count: response.data.reports.length });
+      } else {
+        res.status(400).json({ message: "Format data tidak valid dari Google" });
+      }
+    } catch (error: any) {
+      console.error("Pull reports error:", error.message);
+      res.status(500).json({ message: "Gagal menarik data: " + error.message });
+    }
   });
 
   app.get("/api/stats", (req, res) => {

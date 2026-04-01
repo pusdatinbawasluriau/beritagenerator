@@ -58,6 +58,7 @@ export default function App() {
   const [webappUrl, setWebappUrl] = useState('');
   const [parentFolderId, setParentFolderId] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
   const [isSavingUrl, setIsSavingUrl] = useState(false);
   const [syncStatus, setSyncStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
@@ -170,7 +171,7 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok) {
-        setSyncStatus({ type: 'success', message: "Sinkronisasi ke Google Sheets Berhasil!" });
+        setSyncStatus({ type: 'success', message: "Data berhasil dikirim ke Google Sheets!" });
       } else {
         setSyncStatus({ type: 'error', message: data.message || "Gagal sinkronisasi" });
       }
@@ -179,6 +180,27 @@ export default function App() {
       setSyncStatus({ type: 'error', message: "Terjadi kesalahan saat sinkronisasi. Pastikan URL Web App benar." });
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  const handlePullGoogle = async () => {
+    if (!window.confirm('Tarik data akan menimpa data lokal dengan data dari Google Sheets. Lanjutkan?')) return;
+    setIsPulling(true);
+    setSyncStatus(null);
+    try {
+      const response = await fetch('/api/google/pull', { method: 'POST' });
+      const data = await response.json();
+      if (response.ok) {
+        setSyncStatus({ type: 'success', message: `Berhasil menarik ${data.count} laporan dari Google Sheets!` });
+        fetchLaporan();
+        fetchUsers();
+      } else {
+        setSyncStatus({ type: 'error', message: data.message || 'Gagal menarik data' });
+      }
+    } catch (error) {
+      setSyncStatus({ type: 'error', message: 'Terjadi kesalahan koneksi' });
+    } finally {
+      setIsPulling(false);
     }
   };
 
@@ -1016,20 +1038,27 @@ export default function App() {
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500"
                     />
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <button 
                       onClick={handleSaveWebappUrl}
                       disabled={isSavingUrl}
-                      className="flex-1 bg-gray-800 text-white px-6 py-3 rounded-xl font-bold hover:bg-black transition-all disabled:opacity-50"
+                      className="flex-1 min-w-[120px] bg-gray-800 text-white px-4 py-3 rounded-xl font-bold hover:bg-black transition-all disabled:opacity-50 text-sm"
                     >
                       {isSavingUrl ? 'Menyimpan...' : 'Simpan URL'}
                     </button>
                     <button 
                       onClick={handleSyncGoogle}
                       disabled={isSyncing}
-                      className="flex-1 bg-green-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-green-700 transition-all disabled:opacity-50"
+                      className="flex-1 min-w-[120px] bg-green-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-green-700 transition-all disabled:opacity-50 text-sm"
                     >
-                      {isSyncing ? 'Sinkron...' : 'Sinkron Data'}
+                      {isSyncing ? 'Sinkron...' : 'Kirim ke Google'}
+                    </button>
+                    <button 
+                      onClick={handlePullGoogle}
+                      disabled={isPulling}
+                      className="flex-1 min-w-[120px] bg-blue-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-blue-700 transition-all disabled:opacity-50 text-sm"
+                    >
+                      {isPulling ? 'Menarik...' : 'Tarik dari Google'}
                     </button>
                   </div>
                 </div>
@@ -1224,6 +1253,21 @@ function doPost(e) {
       }
     }
     return ContentService.createTextOutput(JSON.stringify({ success: true, users: users }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === "get_reports") {
+    var data = reportSheet.getDataRange().getValues();
+    var reports = [];
+    var headers = data[0];
+    for (var i = 1; i < data.length; i++) {
+      var report = {};
+      for (var j = 0; j < headers.length; j++) {
+        report[headers[j]] = data[i][j];
+      }
+      reports.push(report);
+    }
+    return ContentService.createTextOutput(JSON.stringify({ success: true, reports: reports }))
       .setMimeType(ContentService.MimeType.JSON);
   }
 }
