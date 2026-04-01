@@ -68,6 +68,37 @@ try { db.exec("ALTER TABLE laporan ADD COLUMN tanggal_penilaian TEXT;"); } catch
 // Cleanup empty users
 try { db.exec("DELETE FROM users WHERE username IS NULL OR trim(username) = '';"); } catch (e) {}
 
+// Helper to parse date robustly
+function parseDateRobust(dateStr: string) {
+  if (!dateStr) return null;
+  if (dateStr.includes('-')) {
+    const parts = dateStr.split('-');
+    if (parts[0].length === 4) {
+      // YYYY-MM-DD
+      const date = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      return isNaN(date.getTime()) ? null : date;
+    } else {
+      // DD-MM-YYYY
+      const date = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      return isNaN(date.getTime()) ? null : date;
+    }
+  }
+  if (dateStr.includes('/')) {
+    const parts = dateStr.split('/');
+    if (parts[2].length === 4) {
+      // DD/MM/YYYY
+      const date = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      return isNaN(date.getTime()) ? null : date;
+    } else {
+      // MM/DD/YYYY or YYYY/MM/DD
+      const date = new Date(dateStr);
+      return isNaN(date.getTime()) ? null : date;
+    }
+  }
+  const date = new Date(dateStr);
+  return isNaN(date.getTime()) ? null : date;
+}
+
 // Helper to get Google settings (prioritize env vars)
 function getGoogleSettings() {
   const webapp_url = process.env.GOOGLE_WEBAPP_URL || "";
@@ -430,7 +461,7 @@ async function startServer() {
     const { tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, rencana_kerja, rincian_kerja, output, bukti_link } = req.body;
     
     // Find user to get drive_folder_id
-    const user = db.prepare("SELECT id, drive_folder_id FROM users WHERE nama = ?").get(nama_pegawai) as any;
+    const user = db.prepare("SELECT id, drive_folder_id FROM users WHERE (nip = ? AND nip != '') OR nama = ?").get(nip_pegawai, nama_pegawai) as any;
     
     const result = db.prepare("INSERT INTO laporan (tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, rencana_kerja, rincian_kerja, output, bukti_link, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')")
       .run(tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, rencana_kerja, rincian_kerja, output, bukti_link);
@@ -441,17 +472,19 @@ async function startServer() {
     if (settings.webapp_url && user?.drive_folder_id) {
       try {
         const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-        const reportDate = new Date(tanggal_pelaporan);
-        const monthName = monthNames[reportDate.getMonth()];
-        const year = reportDate.getFullYear();
-        const folderName = `${monthName} ${year}`;
+        const reportDate = parseDateRobust(tanggal_pelaporan);
+        if (reportDate) {
+          const monthName = monthNames[reportDate.getMonth()];
+          const year = reportDate.getFullYear();
+          const folderName = `${monthName} ${year}`;
 
-        await axios.post(settings.webapp_url, {
-          action: "ensure_month_folder",
-          parentFolderId: user.drive_folder_id,
-          folderName: folderName,
-          laporanId: laporanId
-        }, { timeout: 10000 });
+          await axios.post(settings.webapp_url, {
+            action: "ensure_month_folder",
+            parentFolderId: user.drive_folder_id,
+            folderName: folderName,
+            laporanId: laporanId
+          }, { timeout: 10000 });
+        }
       } catch (err) {
         console.error("Failed to ensure month folder in Google Drive:", err);
       }

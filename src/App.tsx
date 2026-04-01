@@ -100,18 +100,32 @@ export default function App() {
     }
   };
 
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return '-';
-    try {
-      const date = new Date(dateStr);
-      if (isNaN(date.getTime())) return dateStr; // Return as is if invalid
-      const day = String(date.getDate()).padStart(2, '0');
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const year = date.getFullYear();
-      return `${day}/${month}/${year}`;
-    } catch (e) {
-      return dateStr;
+  const parseDateRobust = (dateStr: string) => {
+    if (!dateStr) return null;
+    // Try YYYY-MM-DD
+    if (dateStr.includes('-')) {
+      const [y, m, d] = dateStr.split('-');
+      const date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+      if (!isNaN(date.getTime())) return date;
     }
+    // Try DD/MM/YYYY
+    if (dateStr.includes('/')) {
+      const [d, m, y] = dateStr.split('/');
+      const date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+      if (!isNaN(date.getTime())) return date;
+    }
+    // Fallback to native
+    const date = new Date(dateStr);
+    return isNaN(date.getTime()) ? null : date;
+  };
+
+  const formatDate = (dateStr: string) => {
+    const date = parseDateRobust(dateStr);
+    if (!date) return dateStr || '-';
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
   };
 
   const fetchUsers = async () => {
@@ -355,6 +369,95 @@ export default function App() {
     doc.save(`Rekap_Bulanan_${monthName}_${selectedYear}.pdf`);
   };
 
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [syncAllProgress, setSyncAllProgress] = useState({ current: 0, total: 0 });
+
+  const handleSyncAllPDFs = async () => {
+    if (!webappUrl) {
+      alert("Silakan masukkan URL Web App terlebih dahulu");
+      return;
+    }
+
+    const finishedReports = laporan.filter(l => l.status === 'Selesai');
+    if (finishedReports.length === 0) {
+      alert("Tidak ada laporan dengan status 'Selesai' untuk disinkronkan.");
+      return;
+    }
+
+    if (!window.confirm(`Apakah Anda yakin ingin mensinkronkan ${finishedReports.length} laporan ke Google Drive? Ini mungkin memakan waktu beberapa menit.`)) {
+      return;
+    }
+
+    setIsSyncingAll(true);
+    setSyncAllProgress({ current: 0, total: finishedReports.length });
+
+    // Refresh users once
+    const usersRes = await fetch('/api/users');
+    const latestUsers = await usersRes.json();
+    setUsers(latestUsers);
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < finishedReports.length; i++) {
+      const report = finishedReports[i];
+      setSyncAllProgress({ current: i + 1, total: finishedReports.length });
+
+      try {
+        const employee = latestUsers.find((u: any) => 
+          (u.nip && String(u.nip) === String(report.nip_pegawai)) || 
+          (u.nama?.trim().toLowerCase() === report.nama_pegawai?.trim().toLowerCase())
+        );
+
+        if (employee && employee.drive_folder_id) {
+          const doc = generateLaporanPDF(report);
+          const pdfBase64 = doc.output('datauristring').split(',')[1];
+          
+          const dateToUse = report.tanggal_pelaporan || report.tanggal;
+          const dateObj = parseDateRobust(dateToUse);
+          
+          let monthName = "";
+          let year = "";
+          if (dateObj) {
+            const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+            monthName = months[dateObj.getMonth()];
+            year = String(dateObj.getFullYear());
+          }
+
+          const folderName = monthName ? `${monthName} ${year}` : "Laporan Lainnya";
+          const safeTanggalPelaporan = String(report.tanggal_pelaporan || '').replace(/\//g, '-');
+          const fileName = `Laporan_WFA_${report.nama_pegawai}_${safeTanggalPelaporan}.pdf`;
+
+          const pdfRes = await fetch('/api/google/proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'save_pdf',
+              parentFolderId: employee.drive_folder_id,
+              folderName: folderName,
+              fileName: fileName,
+              base64: pdfBase64
+            })
+          });
+          const pdfData = await pdfRes.json();
+          if (pdfData.success) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } else {
+          failCount++;
+        }
+      } catch (err) {
+        console.error(`Error syncing report ${report.id}:`, err);
+        failCount++;
+      }
+    }
+
+    setIsSyncingAll(false);
+    alert(`Sinkronisasi selesai!\nBerhasil: ${successCount}\nGagal: ${failCount}`);
+  };
+
   const handleLogout = () => {
     setUser(null);
     setView('dashboard');
@@ -398,103 +501,99 @@ export default function App() {
       tanggal_penilaian: new Date().toISOString().split('T')[0],
     };
 
-    await fetch(`/api/laporan/${editingLaporan.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
+    try {
+      await fetch(`/api/laporan/${editingLaporan.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
 
-    // Otomatis simpan ke Google Drive jika webappUrl tersedia
-    if (webappUrl) {
-      try {
+      // Otomatis simpan ke Google Drive jika webappUrl tersedia
+      if (webappUrl) {
         console.log("Memulai proses sinkronisasi PDF ke Google Drive...");
         const updatedItem = { ...editingLaporan, ...data };
         const doc = generateLaporanPDF(updatedItem);
         const pdfBase64 = doc.output('datauristring').split(',')[1];
         
-        // Cari user untuk mendapatkan drive_folder_id
+        // Refresh users to get latest folder IDs
+        const usersRes = await fetch('/api/users');
+        const latestUsers = await usersRes.json();
+        setUsers(latestUsers);
+        
         console.log("Mencari data pegawai:", updatedItem.nama_pegawai, "NIP:", updatedItem.nip_pegawai);
-        const employee = users.find(u => 
-          (u.nip && u.nip === updatedItem.nip_pegawai) || 
+        const employee = latestUsers.find((u: any) => 
+          (u.nip && String(u.nip) === String(updatedItem.nip_pegawai)) || 
           (u.nama?.trim().toLowerCase() === updatedItem.nama_pegawai?.trim().toLowerCase())
         );
         
         if (employee) {
           console.log("Pegawai ditemukan:", employee.nama, "Folder ID:", employee.drive_folder_id);
-        } else {
-          console.warn("Pegawai tidak ditemukan di daftar users. Pastikan nama/NIP sesuai.");
-        }
-        
-        if (employee?.drive_folder_id) {
-          // Gunakan tanggal_pelaporan untuk folder bulan
-          const dateToUse = updatedItem.tanggal_pelaporan || updatedItem.tanggal;
-          let monthName = "";
-          let year = "";
           
-          try {
-            // Coba parsing format YYYY-MM-DD atau DD/MM/YYYY
-            let dateObj;
-            if (dateToUse.includes('-')) {
-              const [y, m, d] = dateToUse.split('-');
-              dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
-            } else if (dateToUse.includes('/')) {
-              const [d, m, y] = dateToUse.split('/');
-              dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
-            } else {
-              dateObj = new Date(dateToUse);
-            }
-
-            if (!isNaN(dateObj.getTime())) {
+          if (employee.drive_folder_id) {
+            // Gunakan tanggal_pelaporan untuk folder bulan
+            const dateToUse = updatedItem.tanggal_pelaporan || updatedItem.tanggal;
+            const dateObj = parseDateRobust(dateToUse);
+            
+            let monthName = "";
+            let year = "";
+            
+            if (dateObj) {
               const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
               monthName = months[dateObj.getMonth()];
               year = String(dateObj.getFullYear());
             }
-          } catch (e) {
-            console.error("Error parsing date for folder name:", e);
+
+            const folderName = monthName ? `${monthName} ${year}` : "Laporan Lainnya";
+            const safeTanggalPelaporan = String(updatedItem.tanggal_pelaporan || '').replace(/\//g, '-');
+            const fileName = `Laporan_WFA_${updatedItem.nama_pegawai}_${safeTanggalPelaporan}.pdf`;
+
+            console.log(`Mengirim ke Google Proxy: Folder=${folderName}, File=${fileName}`);
+
+            // 1. Simpan PDF ke Drive
+            const pdfRes = await fetch('/api/google/proxy', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'save_pdf',
+                parentFolderId: employee.drive_folder_id,
+                folderName: folderName,
+                fileName: fileName,
+                base64: pdfBase64
+              })
+            });
+            const pdfData = await pdfRes.json();
+            console.log("Hasil simpan PDF:", pdfData);
+
+            if (!pdfData.success) {
+              console.error("Gagal simpan PDF ke Drive:", pdfData.message);
+              alert(`Gagal menyimpan PDF ke Google Drive: ${pdfData.message}`);
+            } else {
+              console.log("PDF berhasil disimpan ke Drive dengan ID:", pdfData.fileId);
+            }
+
+            // 2. Sinkronkan data penilaian ke Google Sheet
+            const syncRes = await fetch('/api/google/proxy', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'save_report',
+                report: updatedItem
+              })
+            });
+            const syncData = await syncRes.json();
+            console.log("Hasil sinkronisasi Sheet:", syncData);
+          } else {
+            console.warn("User drive_folder_id tidak ditemukan. PDF tidak dapat disimpan ke Drive.");
+            alert(`Peringatan: Folder Google Drive untuk ${employee.nama} belum diatur. Silakan sinkronkan folder di menu Database.`);
           }
-
-          const folderName = monthName ? `${monthName} ${year}` : "Laporan Lainnya";
-          const safeTanggalPelaporan = String(updatedItem.tanggal_pelaporan || '').replace(/\//g, '-');
-
-          console.log(`Mengirim ke Google Proxy: Folder=${folderName}, File=Laporan_WFA_${updatedItem.nama_pegawai}_${safeTanggalPelaporan}.pdf`);
-
-          // Gunakan proxy backend untuk menghindari CORS dan lebih stabil
-          // 1. Simpan PDF ke Drive
-          const pdfRes = await fetch('/api/google/proxy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'save_pdf',
-              parentFolderId: employee.drive_folder_id,
-              folderName: folderName,
-              fileName: `Laporan_WFA_${updatedItem.nama_pegawai}_${safeTanggalPelaporan}.pdf`,
-              base64: pdfBase64
-            })
-          });
-          const pdfData = await pdfRes.json();
-          console.log("Hasil simpan PDF:", pdfData);
-
-          if (!pdfData.success) {
-            console.error("Gagal simpan PDF ke Drive:", pdfData.message);
-          }
-
-          // 2. Sinkronkan data penilaian ke Google Sheet
-          const syncRes = await fetch('/api/google/proxy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'save_report',
-              report: updatedItem
-            })
-          });
-          const syncData = await syncRes.json();
-          console.log("Hasil sinkronisasi Sheet:", syncData);
         } else {
-          console.warn("User drive_folder_id tidak ditemukan. PDF tidak dapat disimpan ke Drive.");
+          console.warn("Pegawai tidak ditemukan di daftar users. Pastikan nama/NIP sesuai.");
+          alert(`Peringatan: Pegawai ${updatedItem.nama_pegawai} tidak ditemukan di database. PDF tidak dapat disimpan ke Drive.`);
         }
-      } catch (err) {
-        console.error("Gagal sinkronisasi otomatis ke Google:", err);
       }
+    } catch (err) {
+      console.error("Gagal sinkronisasi otomatis ke Google:", err);
+      alert("Terjadi kesalahan saat sinkronisasi ke Google Drive.");
     }
 
     setIsModalOpen(false);
@@ -764,10 +863,9 @@ export default function App() {
     doc.setFont('helvetica', 'normal');
     
     const formatDateIndo = (dateStr: string) => {
-      if (!dateStr) return '-';
+      const date = parseDateRobust(dateStr);
+      if (!date) return dateStr || '-';
       const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
-      const date = new Date(dateStr);
-      if (isNaN(date.getTime())) return dateStr;
       return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
     };
 
@@ -1202,6 +1300,53 @@ export default function App() {
                   </div>
                 )}
 
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 bg-orange-50 rounded-xl flex items-center justify-center">
+                      <RefreshCw className="w-5 h-5 text-[#ff6f00]" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-gray-800">Sinkronisasi Massal PDF</h3>
+                      <p className="text-gray-500 text-sm">Unggah ulang semua laporan yang sudah dinilai ke Google Drive.</p>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    {isSyncingAll && (
+                      <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                        <div className="flex justify-between text-xs font-bold text-gray-500 mb-2">
+                          <span>Memproses Laporan...</span>
+                          <span>{syncAllProgress.current} / {syncAllProgress.total}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className="bg-[#ff6f00] h-2 rounded-full transition-all duration-300" 
+                            style={{ width: `${(syncAllProgress.current / syncAllProgress.total) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    
+                    <button 
+                      onClick={handleSyncAllPDFs}
+                      disabled={isSyncingAll || !webappUrl}
+                      className="w-full bg-[#ff6f00] text-white py-3 rounded-xl font-bold hover:bg-[#e65100] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isSyncingAll ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          Sedang Sinkronisasi...
+                        </>
+                      ) : (
+                        <>
+                          <FileText className="w-4 h-4" />
+                          Mulai Sinkronisasi Massal PDF
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
                 <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
                   <div className="flex items-center gap-2 mb-2">
                     <Code className="w-4 h-4 text-gray-500" />
@@ -1348,7 +1493,7 @@ function doPost(e) {
       try {
         parentFolder = DriveApp.getFolderById(folderId);
       } catch (e) {
-        return ContentService.createTextOutput(JSON.stringify({ success: false, message: "Folder with ID " + folderId + " not found or no access." }))
+        return ContentService.createTextOutput(JSON.stringify({ success: false, message: "Folder dengan ID " + folderId + " tidak ditemukan atau tidak ada akses. Pastikan Folder ID benar." }))
           .setMimeType(ContentService.MimeType.JSON);
       }
       
@@ -1364,7 +1509,8 @@ function doPost(e) {
         fileId: file.getId(),
         fileName: params.fileName,
         folderName: folderName,
-        parentFolderId: folderId
+        parentFolderId: folderId,
+        message: "PDF berhasil disimpan di folder: " + folderName
       })).setMimeType(ContentService.MimeType.JSON);
     } catch (e) {
       return ContentService.createTextOutput(JSON.stringify({ success: false, message: "Error in save_pdf: " + e.toString() }))
