@@ -400,42 +400,39 @@ export default function App() {
         // Cari user untuk mendapatkan drive_folder_id
         const employee = users.find(u => u.nama === updatedItem.nama_pegawai);
         if (employee?.drive_folder_id) {
-          const date = new Date(updatedItem.tanggal);
-          const monthName = date.toLocaleString('id-ID', { month: 'long' });
-          const year = date.getFullYear();
-          const folderName = `${monthName} ${year}`;
+          // Gunakan tanggal dari laporan untuk folder bulan (hindari masalah timezone)
+          const [y, m] = updatedItem.tanggal.split('-').map(Number);
+          const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+          const monthName = months[m - 1];
+          const folderName = `${monthName} ${y}`;
+          const safeTanggalPelaporan = String(updatedItem.tanggal_pelaporan || '').replace(/\//g, '-');
 
-          // 1. Pastikan folder bulan ada
-          const folderRes = await fetch(webappUrl, {
+          // Gunakan proxy backend untuk menghindari CORS dan lebih stabil
+          // 1. Simpan PDF ke Drive
+          await fetch('/api/google/proxy', {
             method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'ensure_month_folder',
-              parentFolderId: employee.drive_folder_id,
-              folderName: folderName
-            })
-          });
-
-          // Karena no-cors, kita tidak bisa baca response, tapi kita bisa coba upload langsung ke folder bulan jika kita punya ID-nya
-          // Namun Apps Script ensure_month_folder mengembalikan ID. Tanpa CORS kita tidak bisa ambil ID.
-          // Alternatif: Apps Script handle upload dan ensure folder sekaligus.
-          
-          await fetch(webappUrl, {
-            method: 'POST',
-            mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               action: 'save_pdf',
               parentFolderId: employee.drive_folder_id,
               folderName: folderName,
-              fileName: `Laporan_WFA_${updatedItem.nama_pegawai}_${updatedItem.tanggal_pelaporan}.pdf`,
+              fileName: `Laporan_WFA_${updatedItem.nama_pegawai}_${safeTanggalPelaporan}.pdf`,
               base64: pdfBase64
+            })
+          });
+
+          // 2. Sinkronkan data penilaian ke Google Sheet
+          await fetch('/api/google/proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'save_report',
+              report: updatedItem
             })
           });
         }
       } catch (err) {
-        console.error("Gagal menyimpan PDF ke Drive:", err);
+        console.error("Gagal sinkronisasi otomatis ke Google:", err);
       }
     }
 
@@ -1180,14 +1177,19 @@ function doPost(e) {
   }
 
   if (action === "save_pdf") {
-    var parentFolder = DriveApp.getFolderById(params.parentFolderId);
-    var folders = parentFolder.getFoldersByName(params.folderName);
-    var targetFolder = folders.hasNext() ? folders.next() : parentFolder.createFolder(params.folderName);
-    
-    var blob = Utilities.newBlob(Utilities.base64Decode(params.base64), "application/pdf", params.fileName);
-    var file = targetFolder.createFile(blob);
-    return ContentService.createTextOutput(JSON.stringify({ success: true, fileId: file.getId() }))
-      .setMimeType(ContentService.MimeType.JSON);
+    try {
+      var parentFolder = DriveApp.getFolderById(params.parentFolderId);
+      var folders = parentFolder.getFoldersByName(params.folderName);
+      var targetFolder = folders.hasNext() ? folders.next() : parentFolder.createFolder(params.folderName);
+      
+      var blob = Utilities.newBlob(Utilities.base64Decode(params.base64), "application/pdf", params.fileName);
+      var file = targetFolder.createFile(blob);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, fileId: file.getId() }))
+        .setMimeType(ContentService.MimeType.JSON);
+    } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, message: e.toString() }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
   }
   
   if (action === "sync") {
@@ -1241,7 +1243,15 @@ function doPost(e) {
       }
     }
     
-    var rowData = headers.map(function(h) { return params.report[h]; });
+    var rowData = headers.map(function(h) { 
+      var val = params.report[h];
+      if (val === undefined) {
+        if (h === "nip") val = params.report.nip_pegawai;
+        if (h === "tanggal_input") val = params.report.tanggal;
+      }
+      return val || ""; 
+    });
+    
     if (rowIdx > -1) {
       reportSheet.getRange(rowIdx, 1, 1, headers.length).setValues([rowData]);
     } else {

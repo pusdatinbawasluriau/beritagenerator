@@ -489,6 +489,19 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.post("/api/google/proxy", async (req, res) => {
+    const settings = getGoogleSettings();
+    if (!settings.webapp_url) return res.status(400).json({ message: "URL not set" });
+
+    try {
+      const response = await axios.post(settings.webapp_url, req.body, { timeout: 60000 });
+      res.json(response.data);
+    } catch (error: any) {
+      console.error("Google proxy error:", error.message);
+      res.status(500).json({ message: "Gagal menghubungi Google: " + error.message });
+    }
+  });
+
   app.post("/api/google/pull", async (req, res) => {
     const settings = getGoogleSettings();
     if (!settings.webapp_url) return res.status(400).json({ message: "URL not set" });
