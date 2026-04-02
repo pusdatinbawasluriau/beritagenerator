@@ -959,7 +959,7 @@ export default function App() {
           className="bg-white w-full max-w-md rounded-2xl shadow-xl overflow-hidden"
         >
           <div className="bg-[#ff6f00] p-8 text-center">
-            <h1 className="text-white text-2xl font-bold">E-Laporan WFA</h1>
+            <h1 className="text-white text-2xl font-bold">LHK WFA Bawaslu</h1>
             <p className="text-white/80 text-sm mt-2">Bawaslu Provinsi Riau</p>
           </div>
           
@@ -1051,7 +1051,7 @@ export default function App() {
       {/* Sidebar */}
       <aside className={`${isSidebarOpen ? 'w-64' : 'w-20'} bg-white border-r border-gray-200 transition-all duration-300 flex flex-col`}>
         <div className="p-6 flex items-center justify-between">
-          {isSidebarOpen && <span className="font-bold text-[#ff6f00] text-xl">E-Laporan</span>}
+          {isSidebarOpen && <span className="font-bold text-[#ff6f00] text-xl">LHK WFA</span>}
           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-1 hover:bg-gray-100 rounded">
             <Menu className="w-5 h-5 text-gray-500" />
           </button>
@@ -1447,7 +1447,7 @@ export default function App() {
                   </div>
                   <pre className="text-[10px] bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto max-h-40">
 {`function doGet(e) {
-  return ContentService.createTextOutput("Web App E-Laporan Aktif. Gunakan POST request untuk sinkronisasi data.")
+  return ContentService.createTextOutput("Web App LHK WFA Aktif. Gunakan POST request untuk sinkronisasi data.")
     .setMimeType(ContentService.MimeType.TEXT);
 }
 
