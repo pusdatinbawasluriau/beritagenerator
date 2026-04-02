@@ -144,6 +144,110 @@ if (userCount.count <= 1) { // Only admin exists
 const allUsers = db.prepare("SELECT username, password FROM users").all();
 console.log("Available users in DB:", JSON.stringify(allUsers));
 
+// Helper to pull users from Google Sheets
+async function pullUsersFromGoogle() {
+  const settings = getGoogleSettings();
+  if (!settings.webapp_url) return;
+
+  try {
+    console.log("Auto-sync: Pulling users from Google Sheets...");
+    const response = await axios.post(settings.webapp_url, { action: "get_users" }, { timeout: 30000 });
+    if (response.data.users && Array.isArray(response.data.users)) {
+      const normalizedUsers = response.data.users.map((u: any) => {
+        const normalized: any = {};
+        Object.keys(u).forEach(key => {
+          normalized[key.toLowerCase()] = u[key];
+        });
+        return normalized;
+      });
+
+      const insertUser = db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+      const usernamesInGoogle = normalizedUsers
+        .map((u: any) => u.username)
+        .filter((u: any) => u && String(u).trim() !== "");
+      
+      for (const u of normalizedUsers) {
+        if (u.username && String(u.username).trim() !== "") {
+          insertUser.run(u.id, u.username, u.password || "", u.nama, u.nip || "", u.role, u.divisi || "", u.drive_folder_id || "");
+        }
+      }
+
+      if (usernamesInGoogle.length > 0) {
+        const placeholders = usernamesInGoogle.map(() => "?").join(",");
+        db.prepare(`DELETE FROM users WHERE username NOT IN (${placeholders}) AND username != 'admin'`).run(...usernamesInGoogle);
+      }
+      console.log(`Auto-sync: Successfully pulled ${normalizedUsers.length} users.`);
+    }
+  } catch (err: any) {
+    console.error("Auto-sync users error:", err.message);
+  }
+}
+
+// Helper to pull reports from Google Sheets
+async function pullReportsFromGoogle() {
+  const settings = getGoogleSettings();
+  if (!settings.webapp_url) return;
+
+  try {
+    console.log("Auto-sync: Pulling reports from Google Sheets...");
+    const response = await axios.post(settings.webapp_url, { action: "get_reports" }, { timeout: 30000 });
+    if (response.data.reports && Array.isArray(response.data.reports)) {
+      const reportsFromGoogle = response.data.reports.map((r: any) => {
+        const normalized: any = {};
+        Object.keys(r).forEach(key => {
+          normalized[key.toLowerCase()] = r[key];
+        });
+        return normalized;
+      });
+      
+      const syncTransaction = db.transaction((reports: any[]) => {
+        const googleIds = reports.map(r => r.id).filter(id => id);
+        if (googleIds.length > 0) {
+          const placeholders = googleIds.map(() => "?").join(",");
+          db.prepare(`DELETE FROM laporan WHERE id NOT IN (${placeholders})`).run(...googleIds);
+        } else {
+          db.prepare("DELETE FROM laporan").run();
+        }
+
+        const insertLaporan = db.prepare(`
+          INSERT OR REPLACE INTO laporan (
+            id, tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, 
+            rencana_kerja, rincian_kerja, output, bukti_link, 
+            nilai_atasan, catatan_atasan, status, dinilai_oleh, tanggal_penilaian
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        for (const r of reports) {
+          if (r.id) {
+            insertLaporan.run(
+              r.id, 
+              r.tanggal_input || r.tanggal || "", 
+              r.tanggal_pelaporan || "", 
+              r.nama_pegawai || "", 
+              r.nip || r.nip_pegawai || "", 
+              r.divisi || "",
+              r.rencana_kerja || "", 
+              r.rincian_kerja || "", 
+              r.output || "", 
+              r.bukti_link || "",
+              r.nilai_atasan || "", 
+              r.catatan_atasan || "", 
+              r.status || "Pending", 
+              r.dinilai_oleh || "", 
+              r.tanggal_penilaian || ""
+            );
+          }
+        }
+      });
+
+      syncTransaction(reportsFromGoogle);
+      console.log(`Auto-sync: Successfully pulled ${reportsFromGoogle.length} reports.`);
+    }
+  } catch (err: any) {
+    console.error("Auto-sync reports error:", err.message);
+  }
+}
+
 async function startServer() {
   console.log("Starting server...");
   const app = express();
@@ -315,41 +419,7 @@ async function startServer() {
 
   app.get("/api/users", async (req, res) => {
     try {
-      const settings = getGoogleSettings();
-      if (settings.webapp_url) {
-        try {
-          const response = await axios.post(settings.webapp_url, { action: "get_users" });
-          if (response.data.users && Array.isArray(response.data.users)) {
-            // Normalize keys to lowercase
-            const normalizedUsers = response.data.users.map((u: any) => {
-              const normalized: any = {};
-              Object.keys(u).forEach(key => {
-                normalized[key.toLowerCase()] = u[key];
-              });
-              return normalized;
-            });
-
-            const insertUser = db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-            const usernamesInGoogle = normalizedUsers
-              .map((u: any) => u.username)
-              .filter((u: any) => u && String(u).trim() !== "");
-            
-            for (const u of normalizedUsers) {
-              if (u.username && String(u.username).trim() !== "") {
-                insertUser.run(u.id, u.username, u.password || "", u.nama, u.nip || "", u.role, u.divisi || "", u.drive_folder_id || "");
-              }
-            }
-
-            // Remove users locally that are no longer in Google Sheets (except admin)
-            if (usernamesInGoogle.length > 0) {
-              const placeholders = usernamesInGoogle.map(() => "?").join(",");
-              db.prepare(`DELETE FROM users WHERE username NOT IN (${placeholders}) AND username != 'admin'`).run(...usernamesInGoogle);
-            }
-          }
-        } catch (err) {
-          console.error("Sync users from Google error:", err);
-        }
-      }
+      await pullUsersFromGoogle();
       const users = db.prepare("SELECT * FROM users").all();
       res.json(users);
     } catch (error) {
@@ -461,32 +531,6 @@ async function startServer() {
     
     const settings = getGoogleSettings();
     
-    // If user exists but has no drive_folder_id, try to create it now
-    if (user && !user.drive_folder_id && settings.webapp_url) {
-      try {
-        console.log(`Folder ID missing for ${user.nama} during report submission, creating...`);
-        const response = await axios.post(settings.webapp_url, {
-          action: "register",
-          parentFolderId: settings.parent_folder_id,
-          nama: user.nama,
-          nip: user.nip,
-          divisi: user.divisi,
-          username: user.username,
-          password: user.password,
-          role: user.role
-        }, { timeout: 15000 });
-
-        if (response.data.success && response.data.drive_folder_id) {
-          const folderId = response.data.drive_folder_id;
-          db.prepare("UPDATE users SET drive_folder_id = ? WHERE id = ?").run(folderId, user.id);
-          user.drive_folder_id = folderId;
-          console.log(`Successfully created folder for ${user.nama}: ${folderId}`);
-        }
-      } catch (err) {
-        console.error("Failed to auto-create folder during report submission:", err);
-      }
-    }
-
     const result = db.prepare("INSERT INTO laporan (tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, rencana_kerja, rincian_kerja, output, bukti_link, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')")
       .run(tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, rencana_kerja, rincian_kerja, output, bukti_link);
     const laporanId = result.lastInsertRowid;
@@ -497,7 +541,33 @@ async function startServer() {
     // Background sync to Google
     (async () => {
       try {
-        // Google Drive Month Folder Creation
+        // 1. If user exists but has no drive_folder_id, try to create it now
+        if (user && !user.drive_folder_id && settings.webapp_url) {
+          try {
+            console.log(`Folder ID missing for ${user.nama} during report submission, creating in background...`);
+            const response = await axios.post(settings.webapp_url, {
+              action: "register",
+              parentFolderId: settings.parent_folder_id,
+              nama: user.nama,
+              nip: user.nip,
+              divisi: user.divisi,
+              username: user.username,
+              password: user.password,
+              role: user.role
+            }, { timeout: 15000 });
+
+            if (response.data.success && response.data.drive_folder_id) {
+              const folderId = response.data.drive_folder_id;
+              db.prepare("UPDATE users SET drive_folder_id = ? WHERE id = ?").run(folderId, user.id);
+              user.drive_folder_id = folderId;
+              console.log(`Successfully created folder for ${user.nama}: ${folderId}`);
+            }
+          } catch (err) {
+            console.error("Failed to auto-create folder during report submission:", err);
+          }
+        }
+
+        // 2. Google Drive Month Folder Creation
         if (settings.webapp_url && user?.drive_folder_id) {
           const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
           const reportDate = parseDateRobust(tanggal_pelaporan);
@@ -515,7 +585,7 @@ async function startServer() {
           }
         }
 
-        // Sync to Google Sheets
+        // 3. Sync to Google Sheets
         syncAllToGoogle();
         console.log(`Background sync initiated for report ${laporanId}`);
       } catch (err) {
@@ -571,70 +641,10 @@ async function startServer() {
   });
 
   app.post("/api/google/pull", async (req, res) => {
-    const settings = getGoogleSettings();
-    if (!settings.webapp_url) return res.status(400).json({ message: "URL not set" });
-
     try {
-      const response = await axios.post(settings.webapp_url, { action: "get_reports" }, { timeout: 30000 });
-      if (response.data.reports && Array.isArray(response.data.reports)) {
-        const reportsFromGoogle = response.data.reports.map((r: any) => {
-          const normalized: any = {};
-          Object.keys(r).forEach(key => {
-            normalized[key.toLowerCase()] = r[key];
-          });
-          return normalized;
-        });
-        
-        // Start transaction for atomic sync
-        const syncTransaction = db.transaction((reports: any[]) => {
-          // Get IDs from Google to handle deletions
-          const googleIds = reports.map(r => r.id).filter(id => id);
-          
-          // Delete local reports that are NOT in Google Sheets
-          if (googleIds.length > 0) {
-            const placeholders = googleIds.map(() => "?").join(",");
-            db.prepare(`DELETE FROM laporan WHERE id NOT IN (${placeholders})`).run(...googleIds);
-          } else {
-            // If Google is empty, clear local
-            db.prepare("DELETE FROM laporan").run();
-          }
-
-          const insertLaporan = db.prepare(`
-            INSERT OR REPLACE INTO laporan (
-              id, tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, 
-              rencana_kerja, rincian_kerja, output, bukti_link, 
-              nilai_atasan, catatan_atasan, status, dinilai_oleh, tanggal_penilaian
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `);
-
-          for (const r of reports) {
-            if (r.id) {
-              insertLaporan.run(
-                r.id, 
-                r.tanggal_input || r.tanggal || "", 
-                r.tanggal_pelaporan || "", 
-                r.nama_pegawai || "", 
-                r.nip || r.nip_pegawai || "", 
-                r.divisi || "",
-                r.rencana_kerja || "", 
-                r.rincian_kerja || "", 
-                r.output || "", 
-                r.bukti_link || "",
-                r.nilai_atasan || "", 
-                r.catatan_atasan || "", 
-                r.status || "Pending", 
-                r.dinilai_oleh || "", 
-                r.tanggal_penilaian || ""
-              );
-            }
-          }
-        });
-
-        syncTransaction(reportsFromGoogle);
-        res.json({ success: true, count: reportsFromGoogle.length });
-      } else {
-        res.status(400).json({ message: "Format data tidak valid dari Google" });
-      }
+      await pullReportsFromGoogle();
+      const count = db.prepare("SELECT COUNT(*) as count FROM laporan").get() as { count: number };
+      res.json({ success: true, count: count.count });
     } catch (error: any) {
       console.error("Pull reports error:", error.message);
       res.status(500).json({ message: "Gagal menarik data: " + error.message });
@@ -681,6 +691,18 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    
+    // Initial sync on startup
+    console.log("Performing initial sync from Google Sheets...");
+    pullUsersFromGoogle();
+    pullReportsFromGoogle();
+
+    // Set up 5-minute auto-sync interval
+    setInterval(() => {
+      console.log("Running scheduled 5-minute auto-sync...");
+      pullUsersFromGoogle();
+      pullReportsFromGoogle();
+    }, 5 * 60 * 1000);
   });
 }
 

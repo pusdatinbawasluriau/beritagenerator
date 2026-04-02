@@ -64,6 +64,7 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('user');
@@ -508,6 +509,9 @@ export default function App() {
 
   const handleSubmitLaporan = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    
     const formData = new FormData(e.currentTarget);
     const data = {
       tanggal: new Date().toISOString().split('T')[0],
@@ -521,19 +525,28 @@ export default function App() {
       bukti_link: formData.get('bukti_link'),
     };
 
-    await fetch(editingLaporan ? `/api/laporan/${editingLaporan.id}` : '/api/laporan', {
-      method: editingLaporan ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    setIsModalOpen(false);
-    setEditingLaporan(null);
-    fetchLaporan();
+    try {
+      await fetch(editingLaporan ? `/api/laporan/${editingLaporan.id}` : '/api/laporan', {
+        method: editingLaporan ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      setIsModalOpen(false);
+      setEditingLaporan(null);
+      fetchLaporan();
+    } catch (error) {
+      console.error('Error submitting report:', error);
+      alert('Gagal mengirim laporan. Silakan coba lagi.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleNilaiLaporan = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!editingLaporan) return;
+    if (!editingLaporan || isSubmitting) return;
+    setIsSubmitting(true);
+    
     const formData = new FormData(e.currentTarget);
     const data = {
       nilai_atasan: formData.get('nilai_atasan'),
@@ -664,6 +677,8 @@ export default function App() {
     } catch (error) {
       console.error('Gagal memberikan penilaian:', error);
       alert('Gagal menyimpan penilaian. Silakan coba lagi.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1759,7 +1774,8 @@ function doPost(e) {
                     <thead className="bg-gray-50 border-b border-gray-100">
                       <tr className="text-gray-500 text-xs uppercase tracking-wider">
                         <th className="px-6 py-4 font-semibold">No</th>
-                        <th className="px-6 py-4 font-semibold">Tanggal</th>
+                        <th className="px-6 py-4 font-semibold">Tgl Input</th>
+                        <th className="px-6 py-4 font-semibold">Tgl Laporan</th>
                         <th className="px-6 py-4 font-semibold">Nama Pegawai</th>
                         <th className="px-6 py-4 font-semibold">Divisi</th>
                         <th className="px-6 py-4 font-semibold">Status</th>
@@ -1772,6 +1788,7 @@ function doPost(e) {
                         <tr key={item.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-6 py-4 text-sm">{index + 1}</td>
                           <td className="px-6 py-4 text-sm">{formatDate(item.tanggal)}</td>
+                          <td className="px-6 py-4 text-sm">{formatDate(item.tanggal_pelaporan)}</td>
                           <td className="px-6 py-4 text-sm font-medium">{item.nama_pegawai}</td>
                           <td className="px-6 py-4 text-sm text-gray-500">{item.divisi}</td>
                           <td className="px-6 py-4">
@@ -2097,8 +2114,13 @@ function doPost(e) {
                       />
                     </div>
                     {(!editingLaporan || editingLaporan.status === 'Pending') && (
-                      <button className="w-full bg-[#ff6f00] text-white py-3 rounded-lg font-bold hover:bg-[#e65100] transition-colors">
-                        {editingLaporan ? 'Simpan Perubahan' : 'Kirim Laporan ke Atasan'}
+                      <button 
+                        type="submit"
+                        disabled={isSubmitting}
+                        className={`w-full ${isSubmitting ? 'bg-gray-400' : 'bg-[#ff6f00] hover:bg-[#e65100]'} text-white py-3 rounded-lg font-bold transition-colors flex items-center justify-center gap-2`}
+                      >
+                        {isSubmitting && <RefreshCw className="w-4 h-4 animate-spin" />}
+                        {isSubmitting ? 'Mengirim...' : (editingLaporan ? 'Simpan Perubahan' : 'Kirim Laporan ke Atasan')}
                       </button>
                     )}
                   </form>
@@ -2163,8 +2185,13 @@ function doPost(e) {
                             placeholder="Berikan catatan atau arahan..."
                           />
                         </div>
-                        <button className="w-full bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-700 transition-colors">
-                          Simpan Penilaian & Approve
+                        <button 
+                          type="submit" 
+                          disabled={isSubmitting}
+                          className={`w-full ${isSubmitting ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'} text-white py-3 rounded-lg font-bold transition-colors flex items-center justify-center gap-2`}
+                        >
+                          {isSubmitting && <RefreshCw className="w-4 h-4 animate-spin" />}
+                          {isSubmitting ? 'Menyimpan...' : 'Simpan Penilaian & Approve'}
                         </button>
                       </form>
                     ) : (
