@@ -19,7 +19,8 @@ import {
   ExternalLink,
   Code,
   Database,
-  RefreshCw
+  RefreshCw,
+  ClipboardList
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -43,9 +44,10 @@ import {
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [view, setView] = useState<'dashboard' | 'laporan' | 'pengaturan' | 'database'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'laporan' | 'pengaturan' | 'database' | 'logs'>('dashboard');
   const [laporan, setLaporan] = useState<Laporan[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [logs, setLogs] = useState<any[]>([]);
   const [stats, setStats] = useState({ total: 0, dinilai: 0, belum: 0 });
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -87,9 +89,22 @@ export default function App() {
       }
       if (user.role === 'admin') {
         fetchRekapStats();
+        if (view === 'logs') {
+          fetchLogs();
+        }
       }
     }
   }, [user, view]);
+
+  const fetchLogs = async () => {
+    try {
+      const res = await fetch('/api/logs');
+      const data = await res.json();
+      setLogs(data);
+    } catch (err) {
+      console.error("Failed to fetch logs:", err);
+    }
+  };
 
   const fetchRekapStats = async () => {
     try {
@@ -1097,6 +1112,13 @@ export default function App() {
                 onClick={() => setView('database')}
               />
               <NavItem 
+                icon={<ClipboardList />} 
+                label="Log Aktivitas" 
+                active={view === 'logs'} 
+                collapsed={!isSidebarOpen}
+                onClick={() => setView('logs')}
+              />
+              <NavItem 
                 icon={<Settings />} 
                 label="Pengaturan" 
                 active={view === 'pengaturan'} 
@@ -1918,6 +1940,74 @@ function doPost(e) {
                           </td>
                         </tr>
                       ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {view === 'logs' && user.role === 'admin' && (
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-900">Log Aktivitas</h3>
+                  <p className="text-gray-500 mt-1">Riwayat aktivitas pengguna dalam sistem</p>
+                </div>
+                <button 
+                  onClick={fetchLogs}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition-all font-medium shadow-sm"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Refresh Log
+                </button>
+              </div>
+
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wider">
+                        <th className="px-6 py-4 font-semibold">Waktu</th>
+                        <th className="px-6 py-4 font-semibold">Pengguna</th>
+                        <th className="px-6 py-4 font-semibold">Aksi</th>
+                        <th className="px-6 py-4 font-semibold">Detail</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {logs.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-6 py-10 text-center text-gray-500 italic">
+                            Belum ada log aktivitas tercatat.
+                          </td>
+                        </tr>
+                      ) : (
+                        logs.map((log) => (
+                          <tr key={log.id} className="hover:bg-gray-50 transition-colors">
+                            <td className="px-6 py-4 text-xs font-mono text-gray-500">
+                              {new Date(log.timestamp).toLocaleString('id-ID')}
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex flex-col">
+                                <span className="text-sm font-medium text-gray-900">{log.nama}</span>
+                                <span className="text-[10px] text-gray-400 font-mono">{log.username}</span>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase ${
+                                log.action.includes('Delete') ? 'bg-red-100 text-red-700' : 
+                                log.action.includes('Create') || log.action.includes('Register') ? 'bg-green-100 text-green-700' :
+                                log.action.includes('Login') ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'
+                              }`}>
+                                {log.action}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-xs text-gray-600">
+                              {log.details}
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>

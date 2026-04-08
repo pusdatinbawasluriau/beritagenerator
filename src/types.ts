@@ -30,8 +30,7 @@ export interface Laporan {
 
 export const DIVISI_OPTIONS = [
   "SDMO",
-  "Penanganan Pelanggaran",
-  "Penyelesaian Sengketa",
+  "Penanganan Pelanggaran dan Penyelesaian Sengketa",
   "Hukum Humas data dan Informasi",
   "Pencegahan"
 ];

@@ -54,6 +54,15 @@ db.exec(`
     dinilai_oleh TEXT,
     tanggal_penilaian TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT,
+    username TEXT,
+    nama TEXT,
+    action TEXT,
+    details TEXT
+  );
 `);
 
   // Migration for google_settings
@@ -67,6 +76,31 @@ try { db.exec("ALTER TABLE laporan ADD COLUMN tanggal_penilaian TEXT;"); } catch
 
 // Cleanup empty users
 try { db.exec("DELETE FROM users WHERE username IS NULL OR trim(username) = '';"); } catch (e) {}
+
+// Migration for combined division
+try {
+  const oldDivisions = ["Penanganan Pelanggaran", "Penyelesaian Sengketa"];
+  const newDivision = "Penanganan Pelanggaran dan Penyelesaian Sengketa";
+  
+  for (const oldDiv of oldDivisions) {
+    db.prepare("UPDATE users SET divisi = ? WHERE divisi = ?").run(newDivision, oldDiv);
+    db.prepare("UPDATE laporan SET divisi = ? WHERE divisi = ?").run(newDivision, oldDiv);
+  }
+  console.log("Division migration completed.");
+} catch (e) {
+  console.error("Division migration error:", e);
+}
+
+// Helper to log activity
+function logActivity(username: string, nama: string, action: string, details: string = "") {
+  try {
+    const timestamp = new Date().toISOString();
+    db.prepare("INSERT INTO logs (timestamp, username, nama, action, details) VALUES (?, ?, ?, ?, ?)")
+      .run(timestamp, username, nama, action, details);
+  } catch (err) {
+    console.error("Failed to log activity:", err);
+  }
+}
 
 // Helper to parse date robustly
 function parseDateRobust(dateStr: string) {
@@ -312,6 +346,7 @@ async function startServer() {
         db.prepare("INSERT INTO google_settings (webapp_url, parent_folder_id) VALUES (?, ?)")
           .run(webappUrl, parentFolderId);
       }
+      logActivity("admin", "Administrator", "Update Google Settings", `URL: ${webappUrl}`);
       res.json({ success: true });
     } catch (error: any) {
       console.error("Error saving settings:", error.message);
@@ -322,6 +357,7 @@ async function startServer() {
   app.post("/api/google/sync", async (req, res) => {
     const success = await syncAllToGoogle();
     if (success) {
+      logActivity("admin", "Administrator", "Manual Sync to Google", "Push data to Google Sheets");
       res.json({ success: true });
     } else {
       res.status(500).json({ message: "Gagal sinkronisasi data ke Google Sheets. Pastikan URL Web App benar dan dapat menerima POST request." });
@@ -370,6 +406,7 @@ async function startServer() {
         // Save to local SQLite for reference (especially drive_folder_id)
         db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
           .run(id, username, password, nama, nip, "staf", divisi, drive_folder_id);
+        logActivity(username, nama, "Register", `New user registered: ${username}`);
         res.json({ success: true, id: id });
       } else {
         res.status(400).json({ message: response.data.message || "Gagal mendaftar" });
@@ -407,6 +444,7 @@ async function startServer() {
         // Sync to local SQLite
         db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
           .run(user.id, user.username, user.password, user.nama, user.nip, user.role, user.divisi, user.drive_folder_id);
+        logActivity(user.username, user.nama, "Login", `User logged in: ${user.username}`);
         res.json(user);
       } else {
         res.status(401).json({ message: response.data.message || "Username atau password salah" });
@@ -449,6 +487,7 @@ async function startServer() {
         const { id, drive_folder_id } = response.data;
         db.prepare("INSERT OR REPLACE INTO users (id, username, password, nama, nip, role, divisi, drive_folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
           .run(id, username, password, nama, nip, role, divisi, drive_folder_id);
+        logActivity("admin", "Administrator", "Create User", `Admin created user: ${username}`);
       }
       
       res.json(response.data);
@@ -482,6 +521,7 @@ async function startServer() {
 
       // 1. Delete from local DB first
       db.prepare("DELETE FROM users WHERE id = ?").run(userId);
+      logActivity("admin", "Administrator", "Delete User", `Admin deleted user: ${userToDelete.username}`);
       
       // 2. Respond immediately
       res.json({ success: true, message: "Pengguna berhasil dihapus dari database lokal. Sinkronisasi Google Sheets berjalan di latar belakang." });
@@ -534,6 +574,8 @@ async function startServer() {
     const result = db.prepare("INSERT INTO laporan (tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, rencana_kerja, rincian_kerja, output, bukti_link, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')")
       .run(tanggal, tanggal_pelaporan, nama_pegawai, nip_pegawai, divisi, rencana_kerja, rincian_kerja, output, bukti_link);
     const laporanId = result.lastInsertRowid;
+
+    logActivity(nama_pegawai, nama_pegawai, "Submit Laporan", `Laporan baru ID: ${laporanId}`);
 
     // Respond immediately to reduce delay
     res.json({ success: true, id: laporanId });
@@ -605,10 +647,12 @@ async function startServer() {
       // Supervisor rating update
       db.prepare("UPDATE laporan SET nilai_atasan = ?, catatan_atasan = ?, dinilai_oleh = ?, status = ?, tanggal_penilaian = ? WHERE id = ?")
         .run(nilai_atasan, catatan_atasan, dinilai_oleh, status, tanggal_penilaian, id);
+      logActivity(dinilai_oleh || "System", dinilai_oleh || "System", "Nilai Laporan", `Laporan ID: ${id}, Nilai: ${nilai_atasan}`);
     } else {
       // Staff content edit
       db.prepare("UPDATE laporan SET tanggal_pelaporan = ?, rencana_kerja = ?, rincian_kerja = ?, output = ?, bukti_link = ? WHERE id = ?")
         .run(tanggal_pelaporan, rencana_kerja, rincian_kerja, output, bukti_link, id);
+      logActivity("System", "System", "Edit Laporan", `Laporan ID: ${id} diupdate oleh staf`);
     }
 
     // Auto-sync to Google Sheets
@@ -620,6 +664,7 @@ async function startServer() {
   app.delete("/api/laporan/:id", (req, res) => {
     const { id } = req.params;
     db.prepare("DELETE FROM laporan WHERE id = ?").run(id);
+    logActivity("System", "System", "Delete Laporan", `Laporan ID: ${id} dihapus`);
     
     // Auto-sync to Google Sheets
     syncAllToGoogle();
@@ -643,11 +688,22 @@ async function startServer() {
   app.post("/api/google/pull", async (req, res) => {
     try {
       await pullReportsFromGoogle();
+      logActivity("admin", "Administrator", "Manual Pull from Google", "Pull data from Google Sheets");
       const count = db.prepare("SELECT COUNT(*) as count FROM laporan").get() as { count: number };
       res.json({ success: true, count: count.count });
     } catch (error: any) {
       console.error("Pull reports error:", error.message);
       res.status(500).json({ message: "Gagal menarik data: " + error.message });
+    }
+  });
+
+  app.get("/api/logs", (req, res) => {
+    try {
+      const logs = db.prepare("SELECT * FROM logs ORDER BY timestamp DESC LIMIT 500").all();
+      res.json(logs);
+    } catch (error) {
+      console.error("Fetch logs error:", error);
+      res.json([]);
     }
   });
 
